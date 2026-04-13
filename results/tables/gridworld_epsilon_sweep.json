@@ -1,0 +1,74 @@
+[
+  {
+    "epsilon": 0.1,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6109051798417715,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008138287699673608,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.811827477222471
+  },
+  {
+    "epsilon": 1.0,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6138647801175798,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008138269550842729,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8157736169731589
+  },
+  {
+    "epsilon": 3.0,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.613893503600548,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008138216007776086,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8158119327981386
+  },
+  {
+    "epsilon": 5.0,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.610582036628383,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.00813663181840507,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8113971715650424
+  },
+  {
+    "epsilon": 7.5,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6066611593791743,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008137599844588167,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8061690125573696
+  },
+  {
+    "epsilon": 10.0,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6088084765274321,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008137119503919097,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8090322622019365
+  },
+  {
+    "epsilon": 12.5,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6108029507346123,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008136285418989253,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8116918391731534
+  },
+  {
+    "epsilon": 15.0,
+    "mle_mse_all": 0.6222500000000002,
+    "itl_mse_all": 0.6126042573577284,
+    "mle_mse_visited": 0.00815,
+    "itl_mse_visited": 0.008137098258127166,
+    "mle_mse_unvisited": 0.8269500000000001,
+    "itl_mse_unvisited": 0.8140933103909288
+  }
+]
