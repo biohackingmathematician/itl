@@ -12,6 +12,16 @@ states (|epsilon-ball(s)| > 1). The paper's main results use ~40%
 stochastic-policy states; appendix includes 20% and 0%.
 
 Laplace smoothing (Eq 5 of paper) is applied when computing T_MLE.
+
+Textbook cross-reference (Krause & Hubotter, "Probabilistic Artificial
+Intelligence"):
+  - Ch 11 (Model-based Bayesian RL): each row T(.|s,a) is a categorical
+    distribution over next states, so a Dir(delta, ..., delta) prior is
+    conjugate and the posterior after counts N_{s,a} is Dir(N_{s,a} + delta).
+    Laplace-smoothed MLE below is the posterior-mean estimator under this
+    Dirichlet prior (or equivalently the MAP under Dir(1+delta)).
+  - Definition 1 (eps-ball) and the eps-optimal expert use Q* from Ch 10
+    Eq 10.9 / Def 10.7.
 """
 
 import numpy as np
@@ -32,6 +42,11 @@ def compute_mle_transitions(
 
     For unvisited (s, a) pairs, this reduces to uniform 1/n_states, which
     matches the paper's "uniform prior for unobserved (s, a)".
+
+    This is the posterior-mean estimator of a Dirichlet-Categorical
+    conjugate model with prior Dir(delta, ..., delta) — see Krause &
+    Hubotter Ch 11 (Bayesian model-based RL, Dirichlet priors on
+    categorical transitions).
     """
     smoothed = N + delta
     T_mle = smoothed / smoothed.sum(axis=2, keepdims=True)

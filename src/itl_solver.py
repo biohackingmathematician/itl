@@ -4,6 +4,15 @@ Core ITL Solver — Inverse Transition Learning via Quadratic Programming.
 Implements Algorithm 1 and Eq 10 from Benac et al. (2024), "Inverse Transition
 Learning: Learning Dynamics from Demonstrations" (AAAI 2025).
 
+Textbook cross-reference (Krause & Hubotter, "Probabilistic Artificial
+Intelligence"):
+  - Ch 10 (Tabular RL): policy evaluation v^pi = (I - gamma P^pi)^-1 r^pi
+    (Eq 10.20) is the equation ITL linearizes and embeds as a constraint.
+    Q*-function and Bellman optimality are Ch 10 Eq 10.9 / Def 10.7.
+  - Ch 11 (Model-based Bayesian RL): motivates learning T* from finite counts
+    and provides the Dirichlet-Categorical conjugate framework that MLE +
+    Laplace smoothing (paper Eq 5) is the MAP case of. See docs/book_mapping.md.
+
 Key fixes vs. the previous version (see results/MVR_findings.md):
 
   1. The epsilon-ball for constraints is now derived from OBSERVED expert
@@ -57,6 +66,10 @@ def compute_linearized_value(
     (I - gamma * T^pi)^{-1}, making Eq 8/9 linear in the decision variable.
 
         v_lin = (I - gamma * T_MLE^{pi_hat})^{-1} R^{pi_hat}
+
+    The bracketed operator is exactly the policy-evaluation linear system from
+    Krause & Hubotter Ch 10 Eq 10.20 (v^pi = (I - gamma P^pi)^-1 r^pi), with
+    T_MLE substituted for T so the solve is a fixed matrix at QP time.
 
     Returns:
         v_lin: (n_states,) linearized value vector
@@ -271,6 +284,11 @@ def _solve_qp(
              for all s in D, all a, a' in observed(s), a != a':
                 |R(s,a) - R(s,a') + gamma (T_sa - T_sa')^T v_lin| <= epsilon  (Eq 9)
              T[s,a,s'] >= 0,  sum_{s'} T[s,a,s'] = 1 for all (s, a).
+
+    The expression R(s,a) + gamma * T_sa^T v_lin is the Q-function
+    (Krause & Hubotter Ch 10 Eq 10.9) evaluated under the linearized value
+    v_lin; the constraints encode the eps-optimality condition Q*(s,a) is
+    within eps of max_a' Q*(s,a').
     """
     # Decision variables (one simplex per (s, a))
     T_var = np.empty((n_states, n_actions), dtype=object)

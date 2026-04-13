@@ -4,6 +4,21 @@ Bayesian Inverse Transition Learning (BITL) — Algorithm 3 from Benac et al. (2
 Samples from the posterior:
     P_epsilon(T* | D) ∝ Prod_{s,a} Dir(N_{s,a} + delta) * I[T satisfies ITL constraints]
 
+Textbook cross-reference (Krause & Hubotter, "Probabilistic Artificial
+Intelligence"):
+  - Ch 11 (Model-based Bayesian RL) motivates the Dirichlet-Categorical
+    posterior over each row T(.|s,a): with a Dir(delta) prior and counts
+    N_{s,a}, the posterior is Dir(N_{s,a} + delta). This is exactly the
+    unnormalized prior factor in P_epsilon(T* | D) above. Bayesian Regret
+    (compute_bayesian_regret below) is the metric the chapter uses to
+    quantify dynamics uncertainty's effect on control.
+  - Ch 12 (Hamiltonian Monte Carlo) gives the leapfrog integrator,
+    Metropolis-adjusted HMC, and the Hamiltonian conservation / acceptance
+    ratio used in `_hmc_step_vec`. Reflected HMC (bounce momentum off
+    constraint hyperplanes) is the constrained-domain variant referenced in
+    Ch 12's "HMC on manifolds / with constraints" discussion; this matches
+    the paper's "reflection off the eps-ball constraint boundary".
+
 Uses Hamiltonian Monte Carlo (HMC) with REFLECTION off constraint boundaries.
 When a leapfrog step would violate an ITL constraint (Eq 8 or Eq 9), the
 momentum is reflected off the constraint hyperplane rather than rejecting.
@@ -214,6 +229,12 @@ def _hmc_step_vec(
     """
     Single HMC step with log-barrier constraints and reflection.
     Fully vectorized constraint evaluation for performance.
+
+    Follows the standard HMC recipe from Krause & Hubotter Ch 12:
+    sample momentum p ~ N(0, I), simulate Hamiltonian dynamics with leapfrog,
+    then Metropolis-accept with prob min(1, exp(H_current - H_prop)). The
+    boundary reflection (see below) swaps rejection at the constraint surface
+    for a deterministic momentum flip, keeping the chain on the feasible set.
     """
     p = rng.standard_normal(phi.shape)
     n_reflections = 0
@@ -288,6 +309,10 @@ def _hamiltonian_vec(phi, p, alpha, A_mat, b_vec, n_states, n_actions, mu):
 def _log_posterior_vec(phi, alpha, A_mat, b_vec, n_states, n_actions, mu):
     """
     Vectorized log posterior: Dirichlet + Jacobian + barrier.
+
+    log Dir(T(.|s,a); alpha_{s,a}) = sum_k (alpha_{s,a,k} - 1) log T(k|s,a)
+    up to a normalizing constant. This is the conjugate posterior from
+    Krause & Hubotter Ch 11 over each row of T (Dirichlet-Categorical).
     """
     T = _phi_to_T(phi, n_states, n_actions)
     T_safe = np.maximum(T, 1e-300)
@@ -578,6 +603,10 @@ def compute_bayesian_regret(
         BR(s) = max_i V^(i)(s) - mean_i V^(i)(s)
 
     High BR = high uncertainty about optimal policy at that state.
+
+    Cross-reference: Krause & Hubotter Ch 11 presents Bayesian regret as the
+    core criterion for model-based Bayesian RL under a posterior over
+    dynamics. V^(i) is computed via Bellman optimality (Ch 10 Eq 10.9).
 
     Args:
         samples: shape (K, n_states, n_actions, n_states)

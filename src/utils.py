@@ -13,6 +13,13 @@ Paper metrics (Benac et al. 2024, Table 4):
 Dynamics metrics (for reference, not in paper):
 
   - MSE on transitions (used in archive_v1; kept for backward compat)
+
+Textbook cross-reference (Krause & Hubotter, "Probabilistic Artificial
+Intelligence"):
+  - Normalized Value and best/eps-matching are defined over V^pi and Q* from
+    Ch 10 (Bellman evaluation Eq 10.20, Bellman optimality Eq 10.9 / Def 10.7).
+  - Bayesian Regret is introduced in Ch 11 as the core metric for
+    model-based Bayesian RL under posterior uncertainty over dynamics.
 """
 
 import numpy as np
@@ -56,6 +63,9 @@ def normalized_value(
 
     If start_state is None, average over uniform initial distribution.
     Uses the reward function R = true_mdp.R (same reward on both sides).
+
+    Both V^pi and V^* are the Bellman-evaluation values from Krause & Hubotter
+    Ch 10 (Eq 10.20 for evaluation under fixed policy; Eq 10.9 for optimality).
     """
     n_states = true_mdp.n_states
     n_actions = true_mdp.n_actions
