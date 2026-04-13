@@ -1,5 +1,9 @@
 # ITL Reproduction: Inverse Transition Learning (Benac et al., 2024)
 
+**Author:** Agna Chan  
+**Date:** 10 April 2026  
+**License:** MIT
+
 Reproducing the results from "Inverse Transition Learning: Learning Dynamics from Demonstrations" as the foundation for Constrained ITL (C-ITL) thesis work.
 
 ## What ITL Does
