@@ -1,5 +1,4 @@
 data/
-results/figures/*.png
 results/tables/*.csv
 __pycache__/
 *.pyc
@@ -9,3 +8,6 @@ __pycache__/
 dist/
 build/
 .env
+
+# MVR experiment logs
+results/logs/

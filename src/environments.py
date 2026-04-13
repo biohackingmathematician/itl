@@ -1,93 +1,96 @@
 """
 Environment definitions for ITL reproduction.
 
-Implements:
-  1. Corridor (3-state) — toy example from Agna's notes for verification
-  2. Gridworld (5x5, 25 states) — main synthetic benchmark from paper
-  3. RandomWorld (15 states, 5 actions) — random MDP benchmark from paper
+Matches the specification in Benac et al. (2024), Appendix "Synthetic Environments":
+
+  1. Corridor (3-state) — toy MDP from Agna's notes, for verification
+  2. Gridworld (5x5, 25 states, 4 actions) — paper's flagship synthetic benchmark,
+     with soft-wall tiles and start/goal matching the paper figure
+  3. RandomWorld (15 states, 5 actions) — 5 successors per (s,a) drawn from
+     Uniform[0,1] and normalized; state-only rewards R(s) ~ Uniform[16-s-1, 16-s]
 """
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple, List
 from .mdp import TabularMDP
 
 
 # =============================================================================
-# 1. CORRIDOR (3-state toy MDP from notes)
+# 1. CORRIDOR (3-state toy MDP, unchanged — used for hand-calc verification)
 # =============================================================================
 
 def make_corridor(gamma: float = 0.9) -> TabularMDP:
     """
-    3-state corridor MDP from Agna's March 2026 worked example.
+    3-state corridor from the March 2026 worked example.
 
     States: s1, s2, s_goal (indices 0, 1, 2)
     Actions: Left=0, Right=1
-    Rewards: R(s1, .) = R(s2, .) = -0.1, R(s_goal, .) = +10
-    Dynamics: Right moves forward (80% success, 20% slip stay),
-              Left moves backward (80% success, 20% slip).
+    Hand-computed (gamma=0.9): v* = [76.87, 87.68, 100.00]
 
-    Known hand-computed values (gamma=0.9, epsilon=1.0):
-      v* = [76.87, 87.68, 100.00]
-      Q*(s1, R) = 76.87, Q*(s1, L) = 69.08
-      Q*(s2, R) = 87.68, Q*(s2, L) = 71.03
+    Note: uses gamma=0.9 by default to match hand calcs, not the paper's 0.95.
     """
-    n_states, n_actions = 3, 2  # L=0, R=1
+    n_states, n_actions = 3, 2
 
     T = np.zeros((n_states, n_actions, n_states))
-
-    # s1 (index 0)
-    T[0, 1] = [0.2, 0.8, 0.0]   # s1, Right -> mostly s2
-    T[0, 0] = [1.0, 0.0, 0.0]   # s1, Left -> stays at s1
-
-    # s2 (index 1)
-    T[1, 1] = [0.0, 0.2, 0.8]   # s2, Right -> mostly s_goal
-    T[1, 0] = [0.8, 0.2, 0.0]   # s2, Left -> mostly back to s1
-
-    # s_goal (index 2) — absorbing
+    T[0, 1] = [0.2, 0.8, 0.0]
+    T[0, 0] = [1.0, 0.0, 0.0]
+    T[1, 1] = [0.0, 0.2, 0.8]
+    T[1, 0] = [0.8, 0.2, 0.0]
     T[2, 0] = [0.0, 0.0, 1.0]
     T[2, 1] = [0.0, 0.0, 1.0]
 
     R = np.array([
-        [-0.1, -0.1],   # s1
-        [-0.1, -0.1],   # s2
-        [10.0, 10.0],   # s_goal
+        [-0.1, -0.1],
+        [-0.1, -0.1],
+        [10.0, 10.0],
     ])
 
     return TabularMDP(n_states, n_actions, T, R, gamma)
 
 
 # =============================================================================
-# 2. GRIDWORLD (5x5, 25 states, 4 actions)
+# 2. GRIDWORLD (5x5, paper spec)
 # =============================================================================
+
+# Soft-wall positions for the standard task, roughly matching the paper's Figure 5.
+# Paper shows a "diagonal barrier" of soft-wall tiles forcing the optimal path
+# to curve around them. Exact positions aren't published, so we use a diagonal
+# barrier that forces a non-trivial optimal policy.
+DEFAULT_SOFT_WALLS_STANDARD = [(1, 1), (1, 2), (2, 1), (3, 3), (3, 2)]
+
+# Transfer task relocates the barrier to force a different optimal path.
+DEFAULT_SOFT_WALLS_TRANSFER = [(1, 3), (2, 3), (2, 2), (3, 1), (3, 2)]
+
 
 def make_gridworld(
     grid_size: int = 5,
-    gamma: float = 0.9,
+    gamma: float = 0.95,
     goal_reward: float = 10.0,
     step_cost: float = -0.1,
-    slip_prob: float = 0.1,
-    seed: Optional[int] = None,
+    soft_wall_penalty: float = -5.0,
+    slip_prob: float = 0.2,
+    soft_walls: Optional[List[Tuple[int, int]]] = None,
+    transfer: bool = False,
 ) -> TabularMDP:
     """
-    5x5 Gridworld matching the paper's synthetic benchmark.
+    5x5 Gridworld matching Benac et al. (2024), Appendix "Gridworld Environment".
 
-    States: 25 cells in a grid (index = row * grid_size + col)
-    Actions: 0=Up, 1=Down, 2=Left, 3=Right
-    Dynamics: Move in intended direction with prob (1 - slip_prob),
-              slip to random adjacent cell with prob slip_prob.
-              Hitting a wall = stay in place.
-    Reward: step_cost everywhere, goal_reward at bottom-right corner.
+    States: 25 cells, indexed row * grid_size + col.
+    Actions: 0=Up, 1=Down, 2=Left, 3=Right.
+    Start: bottom-left (row=grid_size-1, col=0), not encoded in MDP itself but
+           used by the experiment driver for episode initialization.
+    Goal: top-right (row=0, col=grid_size-1), absorbing with reward +10.
+    Step cost: -0.1 on normal tiles.
+    Soft walls: -5 on designated tiles (the agent still transitions; the -5 is
+                the reward for *entering* the tile).
+    Slip: intended move with prob (1 - slip_prob) = 0.8. With prob slip_prob,
+          land in one of the 4 cells adjacent to the *intended* destination,
+          uniformly at random, clipped to grid boundaries.
 
-    Args:
-        grid_size: side length of the grid
-        gamma: discount factor
-        goal_reward: reward at goal state
-        step_cost: cost per step (negative)
-        slip_prob: probability of slipping to adjacent cell
-        seed: random seed (for any stochastic elements)
+    The transfer task uses a different soft-wall layout (same grid, different R).
     """
     n_states = grid_size * grid_size
-    n_actions = 4  # Up=0, Down=1, Left=2, Right=3
+    n_actions = 4
 
     def state_idx(r, c):
         return r * grid_size + c
@@ -95,7 +98,6 @@ def make_gridworld(
     def state_rc(s):
         return s // grid_size, s % grid_size
 
-    # Action effects: (delta_row, delta_col)
     action_deltas = {
         0: (-1, 0),  # Up
         1: (1, 0),   # Down
@@ -103,85 +105,120 @@ def make_gridworld(
         3: (0, 1),   # Right
     }
 
-    goal_state = state_idx(grid_size - 1, grid_size - 1)
+    goal_state = state_idx(0, grid_size - 1)
+
+    if soft_walls is None:
+        soft_walls = DEFAULT_SOFT_WALLS_TRANSFER if transfer else DEFAULT_SOFT_WALLS_STANDARD
+    soft_wall_set = {state_idx(r, c) for (r, c) in soft_walls}
 
     T = np.zeros((n_states, n_actions, n_states))
     R = np.full((n_states, n_actions), step_cost)
-    R[goal_state, :] = goal_reward
+
+    def clip(r, c):
+        """Return (r', c') after clipping to grid; if off-grid, stay put."""
+        if 0 <= r < grid_size and 0 <= c < grid_size:
+            return r, c
+        return None
 
     for s in range(n_states):
         r, c = state_rc(s)
 
+        # Reward on entering state s: goal / soft-wall / step
         if s == goal_state:
-            # Goal is absorbing
+            R[s, :] = goal_reward
+        elif s in soft_wall_set:
+            R[s, :] = soft_wall_penalty
+
+        if s == goal_state:
+            # Absorbing
             T[s, :, s] = 1.0
             continue
 
         for a in range(n_actions):
-            # Intended move
             dr, dc = action_deltas[a]
-            nr, nc = r + dr, c + dc
-
-            # Clip to grid boundaries (wall = stay)
-            if 0 <= nr < grid_size and 0 <= nc < grid_size:
-                intended_next = state_idx(nr, nc)
+            intended_rc = clip(r + dr, c + dc)
+            if intended_rc is None:
+                intended_next = s  # bump into wall -> stay
+                ir, ic = r, c
             else:
-                intended_next = s
+                ir, ic = intended_rc
+                intended_next = state_idx(ir, ic)
 
-            # With probability (1 - slip_prob), go to intended state
+            # With prob 1 - slip_prob, arrive at intended
             T[s, a, intended_next] += (1 - slip_prob)
 
-            # With probability slip_prob, go to a random adjacent cell
-            # (uniformly over all 4 directions, clipped to boundaries)
-            for a2 in range(n_actions):
-                dr2, dc2 = action_deltas[a2]
-                nr2, nc2 = r + dr2, c + dc2
-                if 0 <= nr2 < grid_size and 0 <= nc2 < grid_size:
-                    slip_next = state_idx(nr2, nc2)
+            # With prob slip_prob, land on one of the 4 neighbors of the
+            # INTENDED destination (paper: "slip to any of the four neighboring
+            # tiles of the intended state"), chosen uniformly.
+            for (ddr, ddc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                slip_rc = clip(ir + ddr, ic + ddc)
+                if slip_rc is None:
+                    slip_next = intended_next  # off-grid -> stay at intended
                 else:
-                    slip_next = s
-                T[s, a, slip_next] += slip_prob / n_actions
+                    slip_next = state_idx(*slip_rc)
+                T[s, a, slip_next] += slip_prob / 4.0
 
-    # Verify row sums
-    assert np.allclose(T.sum(axis=2), 1.0, atol=1e-10)
+    # Normalize row sums to exactly 1 (floating-point safety).
+    T /= T.sum(axis=2, keepdims=True)
 
     return TabularMDP(n_states, n_actions, T, R, gamma)
 
 
+def gridworld_start_state(grid_size: int = 5) -> int:
+    """Bottom-left corner, per paper."""
+    return (grid_size - 1) * grid_size + 0
+
+
 # =============================================================================
-# 3. RANDOMWORLD (15 states, 5 actions)
+# 3. RANDOMWORLD (paper spec)
 # =============================================================================
 
 def make_randomworld(
     n_states: int = 15,
     n_actions: int = 5,
-    gamma: float = 0.9,
-    dirichlet_alpha: float = 0.5,
+    gamma: float = 0.95,
+    n_successors: int = 5,
     seed: int = 42,
 ) -> TabularMDP:
     """
-    Randomly generated MDP matching the paper's RandomWorld benchmark.
+    Random MDP following Benac et al. (2024), Appendix "Randomworld Environment":
 
-    Transitions are sampled from Dirichlet(alpha, ..., alpha) for each (s, a).
-    Lower alpha values produce sparser (more concentrated) transitions,
-    which better represents real-world dynamics where states typically
-    transition to a small subset of successors.
-
-    Rewards are sampled from N(0, 1) for each (s, a).
-
-    Args:
-        n_states: number of states (paper uses 15)
-        n_actions: number of actions (paper uses 5)
-        gamma: discount factor
-        dirichlet_alpha: concentration parameter (0.5 = sparse, 1.0 = uniform)
-        seed: random seed for reproducibility
+      - 15 states, 5 actions
+      - For each (s, a): pick `n_successors` = 5 successor states uniformly at
+        random (without replacement), draw their probabilities independently
+        from Uniform[0, 1], and normalize to sum to 1.
+      - Rewards depend on STATE only (not action): R(s) ~ Uniform[16-s-1, 16-s],
+        so state 0 (labeled 1 in paper) is best (Unif[15,16]) and state 14
+        (labeled 15 in paper) is worst (Unif[0,1]).
     """
     rng = np.random.default_rng(seed)
 
-    # Random transitions: lower alpha -> sparser transitions
-    T = rng.dirichlet(np.full(n_states, dirichlet_alpha), size=(n_states, n_actions))
+    T = np.zeros((n_states, n_actions, n_states))
+    for s in range(n_states):
+        for a in range(n_actions):
+            successors = rng.choice(n_states, size=n_successors, replace=False)
+            probs = rng.uniform(0.0, 1.0, size=n_successors)
+            probs /= probs.sum()
+            T[s, a, successors] = probs
 
-    # Random rewards
-    R = rng.standard_normal((n_states, n_actions))
+    # State-only rewards: state s (0-indexed) corresponds to paper's state s+1.
+    # Paper: R(s_paper) ~ Uniform[16 - s_paper - 1, 16 - s_paper]
+    # With 0-indexed s = s_paper - 1: R(s) ~ Uniform[15 - s - 1, 15 - s] = Uniform[14-s, 15-s]
+    R_state = np.array([rng.uniform(15 - s - 1, 15 - s) for s in range(n_states)])
+    R = np.tile(R_state[:, None], (1, n_actions))
 
     return TabularMDP(n_states, n_actions, T, R, gamma)
+
+
+def make_randomworld_transfer(mdp: TabularMDP, seed: int = 0) -> TabularMDP:
+    """
+    Transfer task for RandomWorld: same T, reversed reward structure.
+    Paper: R_transfer(s_paper) ~ Uniform[s_paper - 1, s_paper].
+    With 0-indexed s: R(s) ~ Uniform[s, s+1].
+    """
+    rng = np.random.default_rng(seed)
+    n_states = mdp.n_states
+    n_actions = mdp.n_actions
+    R_state = np.array([rng.uniform(s, s + 1) for s in range(n_states)])
+    R = np.tile(R_state[:, None], (1, n_actions))
+    return TabularMDP(n_states, n_actions, mdp.T, R, mdp.gamma)

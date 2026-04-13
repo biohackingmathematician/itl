@@ -1,213 +1,167 @@
 """
-RandomWorld reproduction experiment.
+RandomWorld reproduction — Benac et al. (2024), Table 4 (Randomworlds, 40%
+stochastic expert, standard task) and Figure 2 bottom row.
 
-Reproduces Table 1 (RandomWorld columns) from Benac et al. (2024).
-
-KEY FINDING: ITL's advantage over MLE depends on the true dynamics being
-far from uniform. For Dirichlet(1,...,1) random MDPs, the uniform MLE for
-unvisited pairs is already near-optimal, so ITL constraints add minimal value.
-ITL shines when transitions are CONCENTRATED (sparse), as in structured environments.
-
-This script tests both:
-  1. Standard random MDPs (showing ITL ≈ MLE)
-  2. Sparse random MDPs (showing ITL > MLE)
-  3. "Structured random" MDPs with concentrated transitions
-
-Setup:
-  - 15 states, 5 actions
-  - gamma = 0.9
-  - N = 10 samples per visited (s, a) pair
-  - Multiple random seeds for averaging
+MVR: 5 worlds × 2 dataset seeds = 10 runs per coverage value.
+Paper uses 20 × 5 = 100 runs; error bars here will be wider.
 """
 
-import numpy as np
-import sys
 import os
+import sys
 import json
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.environments import make_randomworld
-from src.mdp import TabularMDP, deterministic_policy
-from src.expert import generate_batch_data, make_stochastic_expert
+from src.expert import make_epsilon_optimal_expert, generate_batch_dataset
 from src.itl_solver import solve_itl
 from src.utils import (
-    transition_mse_visited_vs_unvisited,
-    print_results_table,
+    best_matching,
+    epsilon_matching,
+    normalized_value,
+    total_variation,
+    count_constraint_violations,
+    transition_mse,
+    summarize_runs,
+    plot_coverage_sensitivity,
 )
+from src.mdp import TabularMDP
 
 
-def make_structured_randomworld(n_states=15, n_actions=5, gamma=0.9,
-                                 sparsity=3, seed=42):
-    """
-    Random MDP with CONCENTRATED transitions — each (s,a) transitions
-    mainly to `sparsity` states with high probability.
+def evaluate(T_hat, R, gamma, true_mdp, epsilon):
+    """RandomWorld has uniform initial distribution, so no single start state."""
+    mdp_learned = TabularMDP(
+        true_mdp.n_states, true_mdp.n_actions, T_hat, R, gamma
+    )
+    _, _, pi_hat = mdp_learned.compute_optimal_policy()
+    _, Q_star, pi_star = true_mdp.compute_optimal_policy()
 
-    This better represents real-world dynamics (e.g., clinical data)
-    where transitions are not uniformly spread across all states.
-    """
-    rng = np.random.default_rng(seed)
-    T = np.zeros((n_states, n_actions, n_states))
-
-    for s in range(n_states):
-        for a in range(n_actions):
-            # Pick `sparsity` dominant next-states
-            dominant = rng.choice(n_states, size=sparsity, replace=False)
-            probs = rng.dirichlet(np.ones(sparsity) * 2.0)
-            # Assign 95% of mass to dominant states, 5% spread uniformly
-            T[s, a, dominant] = 0.95 * probs
-            T[s, a] += 0.05 / n_states
-            T[s, a] /= T[s, a].sum()
-
-    R = rng.standard_normal((n_states, n_actions))
-    return TabularMDP(n_states, n_actions, T, R, gamma)
-
-
-def run_standard_randomworld():
-    """Standard Dirichlet random MDPs (baseline, ITL ≈ MLE)."""
-    print("\n--- Standard Random MDP (Dirichlet alpha=1.0) ---")
-    print("Expected: ITL ≈ MLE (uniform MLE is already near-optimal)")
-
-    mdp_seeds = [42, 123, 456, 789, 1024]
-    epsilons = [0.5, 1.0, 3.0, 5.0, 7.5, 10.0]
-
-    all_results = {eps: {"mle": [], "itl": []} for eps in epsilons}
-
-    for mdp_seed in mdp_seeds:
-        mdp = make_randomworld(n_states=15, n_actions=5, gamma=0.9,
-                               dirichlet_alpha=1.0, seed=mdp_seed)
-        _, Q_star, _ = mdp.compute_optimal_policy()
-        optimal_actions = Q_star.argmax(axis=1)
-        pi_expert = deterministic_policy(mdp.n_states, mdp.n_actions, optimal_actions)
-        N, T_mle = generate_batch_data(mdp, pi_expert, n_samples_per_sa=10, seed=42)
-
-        mle_results = transition_mse_visited_vs_unvisited(mdp.T, T_mle, N)
-
-        for eps in epsilons:
-            T_hat, _ = solve_itl(N, T_mle, mdp.R, mdp.gamma, epsilon=eps,
-                                 max_iter=10, verbose=False)
-            itl_results = transition_mse_visited_vs_unvisited(mdp.T, T_hat, N)
-            all_results[eps]["mle"].append(mle_results["mse_all"])
-            all_results[eps]["itl"].append(itl_results["mse_all"])
-
-    _print_summary(epsilons, all_results)
-    return all_results
-
-
-def run_structured_randomworld():
-    """Structured random MDPs with concentrated transitions (ITL should help)."""
-    print("\n--- Structured Random MDP (concentrated transitions) ---")
-    print("Expected: ITL > MLE (uniform MLE is far from concentrated truth)")
-
-    mdp_seeds = [42, 123, 456, 789, 1024]
-    epsilons = [0.5, 1.0, 3.0, 5.0, 7.5, 10.0, 15.0]
-
-    all_results = {eps: {"mle": [], "itl": []} for eps in epsilons}
-
-    for mdp_seed in mdp_seeds:
-        mdp = make_structured_randomworld(n_states=15, n_actions=5, gamma=0.9,
-                                           sparsity=3, seed=mdp_seed)
-        _, Q_star, _ = mdp.compute_optimal_policy()
-        optimal_actions = Q_star.argmax(axis=1)
-        pi_expert = deterministic_policy(mdp.n_states, mdp.n_actions, optimal_actions)
-        N, T_mle = generate_batch_data(mdp, pi_expert, n_samples_per_sa=10, seed=42)
-
-        mle_results = transition_mse_visited_vs_unvisited(mdp.T, T_mle, N)
-
-        for eps in epsilons:
-            T_hat, _ = solve_itl(N, T_mle, mdp.R, mdp.gamma, epsilon=eps,
-                                 max_iter=10, verbose=False)
-            itl_results = transition_mse_visited_vs_unvisited(mdp.T, T_hat, N)
-            all_results[eps]["mle"].append(mle_results["mse_all"])
-            all_results[eps]["itl"].append(itl_results["mse_all"])
-
-    _print_summary(epsilons, all_results)
-    return all_results
-
-
-def run_stochastic_expert_randomworld():
-    """Random MDPs with stochastic expert (more visited pairs)."""
-    print("\n--- Random MDP with Stochastic Expert ---")
-    print("Expert uses uniform over epsilon-ball (more coverage)")
-
-    mdp_seeds = [42, 123, 456, 789, 1024]
-    expert_eps = 3.0
-    epsilons = [1.0, 2.0, 3.0, 5.0, 7.5, 10.0]
-
-    all_results = {eps: {"mle": [], "itl": []} for eps in epsilons}
-
-    for mdp_seed in mdp_seeds:
-        mdp = make_structured_randomworld(n_states=15, n_actions=5, gamma=0.9,
-                                           sparsity=3, seed=mdp_seed)
-        pi_expert = make_stochastic_expert(mdp, expert_eps)
-        N, T_mle = generate_batch_data(mdp, pi_expert, n_samples_per_sa=10, seed=42)
-
-        mle_results = transition_mse_visited_vs_unvisited(mdp.T, T_mle, N)
-
-        for eps in epsilons:
-            T_hat, _ = solve_itl(N, T_mle, mdp.R, mdp.gamma, epsilon=eps,
-                                 max_iter=10, verbose=False)
-            itl_results = transition_mse_visited_vs_unvisited(mdp.T, T_hat, N)
-            all_results[eps]["mle"].append(mle_results["mse_all"])
-            all_results[eps]["itl"].append(itl_results["mse_all"])
-
-    _print_summary(epsilons, all_results)
-    return all_results
-
-
-def _print_summary(epsilons, all_results):
-    """Print formatted results table."""
-    print(f"\n  {'Epsilon':>10}  {'MLE MSE':>12}  {'ITL MSE':>12}  {'Improvement':>12}")
-    print(f"  {'-'*10}  {'-'*12}  {'-'*12}  {'-'*12}")
-
-    best_eps = None
-    best_improvement = -np.inf
-
-    for eps in epsilons:
-        mle_mean = np.mean(all_results[eps]["mle"])
-        itl_mean = np.mean(all_results[eps]["itl"])
-        improvement = (mle_mean - itl_mean) / mle_mean * 100
-        print(f"  {eps:>10.1f}  {mle_mean:>12.6f}  {itl_mean:>12.6f}  {improvement:>11.2f}%")
-
-        if improvement > best_improvement:
-            best_improvement = improvement
-            best_eps = eps
-
-    print(f"\n  Best: epsilon={best_eps} ({best_improvement:.2f}% improvement)")
+    return {
+        "normalized_value": normalized_value(
+            T_hat, R, gamma, true_mdp, start_state=None
+        ),
+        "best_matching": best_matching(pi_hat, pi_star),
+        "epsilon_matching": epsilon_matching(pi_hat, Q_star, epsilon),
+        "total_variation": total_variation(true_mdp.T, T_hat),
+        "n_violations": count_constraint_violations(
+            T_hat, R, gamma, true_mdp, epsilon
+        ),
+        "mse": transition_mse(true_mdp.T, T_hat),
+    }
 
 
 def main():
-    print("=" * 60)
-    print("  RANDOMWORLD EXPERIMENTS (15 states, 5 actions)")
-    print("  Benac et al. (2024) Reproduction")
-    print("=" * 60)
+    print("=" * 70)
+    print("  RANDOMWORLD — Benac et al. (2024) MVR (Table 4 / Figure 2 bottom)")
+    print("=" * 70)
 
-    results_standard = run_standard_randomworld()
-    results_structured = run_structured_randomworld()
-    results_stochastic = run_stochastic_expert_randomworld()
+    # Paper constants
+    GAMMA = 0.95
+    DELTA = 0.001
+    EPSILON = 5.0
+    STOCHASTIC_FRACTION = 0.4
+    K = 5                          # paper's RandomWorld K
+    COVERAGES = [0.2, 0.4, 0.6, 0.8, 1.0]
+    N_WORLDS = 5                   # MVR: 5 worlds (paper: 20)
+    N_DATASETS_PER_WORLD = 2       # MVR: 2 datasets/world (paper: 5)
 
-    # Save all results
+    rows = []
+    for coverage in COVERAGES:
+        mle_runs = {k: [] for k in ["normalized_value", "best_matching",
+                                     "epsilon_matching", "total_variation",
+                                     "n_violations", "mse"]}
+        itl_runs = {k: [] for k in mle_runs}
+
+        for world_seed in range(N_WORLDS):
+            mdp = make_randomworld(
+                n_states=15, n_actions=5, gamma=GAMMA,
+                n_successors=5, seed=world_seed,
+            )
+            pi_expert = make_epsilon_optimal_expert(
+                mdp, epsilon=EPSILON,
+                target_stochastic_fraction=STOCHASTIC_FRACTION,
+            )
+
+            for data_seed in range(N_DATASETS_PER_WORLD):
+                combined_seed = 1000 * world_seed + data_seed
+                N, T_mle, _ = generate_batch_dataset(
+                    mdp, pi_expert, coverage=coverage, K=K,
+                    delta=DELTA, seed=combined_seed,
+                )
+                T_hat, _ = solve_itl(
+                    N, T_mle, mdp.R, mdp.gamma,
+                    epsilon=EPSILON, max_iter=10, verbose=False,
+                )
+
+                mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON)
+                itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON)
+                for k in mle_runs:
+                    mle_runs[k].append(mle_metrics[k])
+                    itl_runs[k].append(itl_metrics[k])
+
+        row = {"coverage": coverage}
+        for k in mle_runs:
+            m_mean, m_std = summarize_runs(mle_runs[k])
+            i_mean, i_std = summarize_runs(itl_runs[k])
+            row[f"mle_{k}_mean"] = m_mean
+            row[f"mle_{k}_std"] = m_std
+            row[f"itl_{k}_mean"] = i_mean
+            row[f"itl_{k}_std"] = i_std
+        rows.append(row)
+
+        print(f"\n  Coverage = {coverage:.1f}  "
+              f"(avg over {N_WORLDS * N_DATASETS_PER_WORLD} runs)")
+        print(f"    Normalized Value  MLE: {row['mle_normalized_value_mean']:+.3f} "
+              f"± {row['mle_normalized_value_std']:.3f}   "
+              f"ITL: {row['itl_normalized_value_mean']:+.3f} "
+              f"± {row['itl_normalized_value_std']:.3f}")
+        print(f"    Best matching     MLE: {row['mle_best_matching_mean']:.3f} "
+              f"± {row['mle_best_matching_std']:.3f}   "
+              f"ITL: {row['itl_best_matching_mean']:.3f} "
+              f"± {row['itl_best_matching_std']:.3f}")
+        print(f"    ε-matching        MLE: {row['mle_epsilon_matching_mean']:.3f}   "
+              f"ITL: {row['itl_epsilon_matching_mean']:.3f}")
+
+    # Save
     os.makedirs("results/tables", exist_ok=True)
+    os.makedirs("results/figures", exist_ok=True)
 
-    summary = {
-        "standard": {str(k): {"mle": float(np.mean(v["mle"])), "itl": float(np.mean(v["itl"]))}
-                     for k, v in results_standard.items()},
-        "structured": {str(k): {"mle": float(np.mean(v["mle"])), "itl": float(np.mean(v["itl"]))}
-                       for k, v in results_structured.items()},
-        "stochastic_expert": {str(k): {"mle": float(np.mean(v["mle"])), "itl": float(np.mean(v["itl"]))}
-                              for k, v in results_stochastic.items()},
-    }
-    with open("results/tables/randomworld_results.json", "w") as f:
-        json.dump(summary, f, indent=2)
+    out_path = "results/tables/randomworld_coverage_sweep.json"
+    with open(out_path, "w") as f:
+        json.dump({
+            "config": {
+                "gamma": GAMMA, "delta": DELTA, "epsilon": EPSILON,
+                "stochastic_fraction": STOCHASTIC_FRACTION, "K": K,
+                "n_worlds": N_WORLDS, "n_datasets_per_world": N_DATASETS_PER_WORLD,
+                "coverages": COVERAGES,
+            },
+            "rows": rows,
+        }, f, indent=2)
 
-    print("\n" + "=" * 60)
-    print("  KEY INSIGHT FOR THESIS:")
-    print("  ITL's advantage requires structured/concentrated dynamics.")
-    print("  For uniform-like transitions, MLE is already near-optimal.")
-    print("  This motivates C-ITL: additional constraints add value when")
-    print("  the environment has exploitable structure.")
-    print("=" * 60)
-    print("\nDone! Results saved to results/tables/randomworld_results.json")
+    plot_coverage_sensitivity(
+        coverages=[r["coverage"] for r in rows],
+        itl_mean=[r["itl_normalized_value_mean"] for r in rows],
+        itl_std=[r["itl_normalized_value_std"] for r in rows],
+        mle_mean=[r["mle_normalized_value_mean"] for r in rows],
+        mle_std=[r["mle_normalized_value_std"] for r in rows],
+        metric_name="Normalized Value",
+        title=f"RandomWorld — ITL vs MLE (ε={EPSILON}, 40% stochastic expert)",
+        save_path="results/figures/randomworld_normalized_value_vs_coverage.png",
+    )
+    plot_coverage_sensitivity(
+        coverages=[r["coverage"] for r in rows],
+        itl_mean=[r["itl_best_matching_mean"] for r in rows],
+        itl_std=[r["itl_best_matching_std"] for r in rows],
+        mle_mean=[r["mle_best_matching_mean"] for r in rows],
+        mle_std=[r["mle_best_matching_std"] for r in rows],
+        metric_name="Best matching",
+        title="RandomWorld — Best matching vs Coverage",
+        save_path="results/figures/randomworld_best_matching_vs_coverage.png",
+    )
+
+    print(f"\n  Results written to {out_path}")
+    print("  Figures in results/figures/")
 
 
 if __name__ == "__main__":

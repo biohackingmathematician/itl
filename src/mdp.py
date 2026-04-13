@@ -22,7 +22,7 @@ class TabularMDP:
         n_actions: int,
         T: np.ndarray,        # shape (n_states, n_actions, n_states)
         R: np.ndarray,         # shape (n_states, n_actions)
-        gamma: float = 0.9,
+        gamma: float = 0.95,   # paper default (Benac et al. 2024)
     ):
         assert T.shape == (n_states, n_actions, n_states)
         assert R.shape == (n_states, n_actions)
