@@ -94,7 +94,15 @@ def main():
     start_state = gridworld_start_state(grid_size=5)
     print(f"  Start state: {start_state} (bottom-left)")
 
-    # --- Coverage sweep ---
+    # --- Coverage sweep with per-seed checkpointing ---
+    os.makedirs("results/checkpoints", exist_ok=True)
+    ckpt_path = "results/checkpoints/gridworld_seeds.json"
+    if os.path.exists(ckpt_path):
+        with open(ckpt_path) as f:
+            checkpoint = json.load(f)
+    else:
+        checkpoint = {}
+
     rows = []
     for coverage in COVERAGES:
         mle_runs = {k: [] for k in ["normalized_value", "best_matching",
@@ -103,11 +111,19 @@ def main():
         itl_runs = {k: [] for k in mle_runs}
 
         for seed in range(N_SEEDS):
-            T_mle, T_hat, _ = run_one(
-                mdp, pi_expert, coverage, EPSILON, K, DELTA, seed=seed
-            )
-            mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
-            itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
+            key = f"{coverage}:{seed}"
+            if key in checkpoint:
+                mle_metrics = checkpoint[key]["mle"]
+                itl_metrics = checkpoint[key]["itl"]
+            else:
+                T_mle, T_hat, _ = run_one(
+                    mdp, pi_expert, coverage, EPSILON, K, DELTA, seed=seed
+                )
+                mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
+                itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
+                checkpoint[key] = {"mle": mle_metrics, "itl": itl_metrics}
+                with open(ckpt_path, "w") as f:
+                    json.dump(checkpoint, f)
             for k in mle_runs:
                 mle_runs[k].append(mle_metrics[k])
                 itl_runs[k].append(itl_metrics[k])

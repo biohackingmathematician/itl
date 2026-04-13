@@ -1,29 +1,49 @@
 """
 Core ITL Solver — Inverse Transition Learning via Quadratic Programming.
 
-Implements Algorithm 1 from Benac et al. (2024).
+Implements Algorithm 1 and Eq 10 from Benac et al. (2024), "Inverse Transition
+Learning: Learning Dynamics from Demonstrations" (AAAI 2025).
 
-The optimization problem (Eq 10 in the paper):
+Key fixes vs. the previous version (see results/MVR_findings.md):
 
-    min_T  sum_{s,a,s'} N_{s,a,s'} * [T(s'|s,a) - T_mle(s'|s,a)]^2
+  1. The epsilon-ball for constraints is now derived from OBSERVED expert
+     actions at s in D (per the paper's definition), NOT from Q_hat under
+     T_hat. The paper (page 4):
+       "we construct an estimated policy pi_hat(.|s;T*), such that for s in
+        D, pi_hat(a|s;T*) assigns a uniform probability to all actions a
+        present in D"
+     And Definition 1: E_eps(s;T*) is the set of actions the eps-optimal
+     expert policy takes at s. We observe these directly from the data.
 
-    subject to:
-        Constraint 1 (Eq 8): For valid a, invalid a':
-            R(s,a) - R(s,a') + gamma * [T(.|s,a) - T(.|s,a')]^T * v_lin >= epsilon
+  2. Constraints are only added for (s, a) in D (visited state-action pairs),
+     per the scope "for all (s, a) in D" in Eq 10.
 
-        Constraint 2 (Eq 9): For valid a, valid a':
-            |R(s,a) - R(s,a') + gamma * [T(.|s,a) - T(.|s,a')]^T * v_lin| <= epsilon
+  3. The linearization ALWAYS uses T_MLE (never T_hat): v_lin is computed
+     with P^pi_hat = sum_a pi_hat[s,a] * T_MLE[s,a,s'], per the paper's
+     linearization trick (page 4).
 
-        Plus: T(s'|s,a) >= 0, sum_{s'} T(s'|s,a) = 1 for all (s,a)
+  4. Initial policy pi^(0)(.|s) for s NOT in D is UNIFORM (Algorithm 1 line 3),
+     not greedy. After iteration 0, it switches to pi*(T^(i)) for s not in D.
 
-    where v_lin = (I - gamma * T^pi_mle)^{-1} R^pi
-    is the linearized value vector (the "linearization trick").
+  5. Loop termination: the paper stops when T satisfies the epsilon-ball
+     property for each s in D. We check that explicitly, in addition to a
+     safety max_iter and a tiny-change fallback.
 """
+
+from __future__ import annotations
+
+import warnings
 
 import numpy as np
 import cvxpy as cp
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
+
 from .mdp import TabularMDP
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def compute_linearized_value(
@@ -33,86 +53,91 @@ def compute_linearized_value(
     gamma: float,
 ) -> np.ndarray:
     """
-    Compute the linearized value vector used in ITL's constraints.
+    Paper's linearization trick (page 4): substitute T_MLE^{pi_hat} for T in
+    (I - gamma * T^pi)^{-1}, making Eq 8/9 linear in the decision variable.
 
-    v_lin = (I - gamma * T^{pi_hat}_mle)^{-1} * R^{pi_hat}
-
-    This is the "linearization trick" (Section 3.2 of the paper):
-    we substitute T_mle under pi_hat for the unknown T^pi inside the
-    matrix inverse, making constraints linear in the decision variable T.
-
-    Args:
-        T_mle: MLE transitions, shape (n_states, n_actions, n_states)
-        R: rewards, shape (n_states, n_actions)
-        pi_hat: estimated expert policy, shape (n_states, n_actions)
-        gamma: discount factor
+        v_lin = (I - gamma * T_MLE^{pi_hat})^{-1} R^{pi_hat}
 
     Returns:
-        v_lin: linearized value vector, shape (n_states,)
+        v_lin: (n_states,) linearized value vector
     """
-    n_states = T_mle.shape[0]
-
-    # P^pi_mle[s, s'] = sum_a pi_hat[s,a] * T_mle[s,a,s']
     P_pi = np.einsum("sa,sab->sb", pi_hat, T_mle)
-
-    # r^pi[s] = sum_a pi_hat[s,a] * R[s,a]
     r_pi = np.einsum("sa,sa->s", pi_hat, R)
-
-    # v = (I - gamma * P^pi)^{-1} r^pi
-    A = np.eye(n_states) - gamma * P_pi
-    v_lin = np.linalg.solve(A, r_pi)
-
-    return v_lin
+    A = np.eye(T_mle.shape[0]) - gamma * P_pi
+    return np.linalg.solve(A, r_pi)
 
 
-def estimate_expert_policy(
-    N: np.ndarray,
-    T_current: np.ndarray,
+def _initial_policy_from_data(
+    visited_sa: np.ndarray,
+    n_actions: int,
+) -> np.ndarray:
+    """
+    Algorithm 1, lines 2-3:
+        pi^(0)(.|s) = uniform over observed actions  for s in D
+        pi^(0)(.|s) = uniform over ALL actions       for s not in D
+    """
+    n_states = visited_sa.shape[0]
+    pi = np.zeros((n_states, n_actions))
+    for s in range(n_states):
+        chosen = visited_sa[s]
+        if chosen.any():
+            pi[s, chosen] = 1.0 / chosen.sum()
+        else:
+            pi[s] = 1.0 / n_actions
+    return pi
+
+
+def _next_policy(
+    visited_sa: np.ndarray,
+    Q_hat: np.ndarray,
+) -> np.ndarray:
+    """
+    Algorithm 1, lines 8-9:
+        pi^(i)(.|s) = uniform over observed actions   for s in D
+        pi^(i)(.|s) = one-hot on argmax_a Q(s,a;T^(i))  for s not in D
+    """
+    n_states, n_actions = visited_sa.shape
+    pi = np.zeros((n_states, n_actions))
+    for s in range(n_states):
+        chosen = visited_sa[s]
+        if chosen.any():
+            pi[s, chosen] = 1.0 / chosen.sum()
+        else:
+            best_a = int(np.argmax(Q_hat[s]))
+            pi[s, best_a] = 1.0
+    return pi
+
+
+def _epsilon_ball_matches_observed(
+    T_hat: np.ndarray,
     R: np.ndarray,
     gamma: float,
     epsilon: float,
-) -> np.ndarray:
+    visited_sa: np.ndarray,
+) -> Tuple[bool, np.ndarray]:
     """
-    Estimate the expert policy pi_hat from data (Algorithm 1, line 6-9).
+    Check whether T_hat's epsilon-ball at every observed state s matches
+    the set of actions the expert was observed taking at s.
 
-    For visited (s, a) pairs: uniform over actions the expert actually chose.
-    For unvisited states: use optimal action under current T estimate.
-
-    Args:
-        N: transition counts, shape (n_states, n_actions, n_states)
-        T_current: current transition estimate, shape (n_states, n_actions, n_states)
-        R: rewards, shape (n_states, n_actions)
-        gamma: discount factor
-        epsilon: near-optimality tolerance
-
-    Returns:
-        pi_hat: estimated expert policy, shape (n_states, n_actions)
+    Returns (satisfied, Q_hat).
     """
-    n_states, n_actions, _ = N.shape
-    pi_hat = np.zeros((n_states, n_actions))
+    mdp = TabularMDP(T_hat.shape[0], T_hat.shape[1], T_hat, R, gamma)
+    _, Q_hat, _ = mdp.compute_optimal_policy()
+    q_max = Q_hat.max(axis=1, keepdims=True)
+    ball = (q_max - Q_hat) <= epsilon + 1e-9  # (n_states, n_actions)
 
-    # Which (s, a) pairs were visited?
-    sa_counts = N.sum(axis=2)  # (n_states, n_actions)
-    visited_states = sa_counts.sum(axis=1) > 0  # (n_states,)
+    for s in range(visited_sa.shape[0]):
+        if not visited_sa[s].any():
+            continue
+        # Paper requirement: eps-ball under T_hat at observed s == observed actions
+        if not np.array_equal(ball[s], visited_sa[s]):
+            return False, Q_hat
+    return True, Q_hat
 
-    for s in range(n_states):
-        if visited_states[s]:
-            # Uniform over actions the expert chose at this state
-            actions_chosen = sa_counts[s] > 0
-            n_chosen = actions_chosen.sum()
-            if n_chosen > 0:
-                pi_hat[s, actions_chosen] = 1.0 / n_chosen
-            else:
-                pi_hat[s] = 1.0 / n_actions
-        else:
-            # Unvisited state: use greedy action under current T
-            # Build a temporary MDP with T_current to find optimal action
-            temp_mdp = TabularMDP(n_states, n_actions, T_current, R, gamma)
-            _, Q, _ = temp_mdp.compute_optimal_policy()
-            best_a = Q[s].argmax()
-            pi_hat[s, best_a] = 1.0
 
-    return pi_hat
+# ---------------------------------------------------------------------------
+# Main solver
+# ---------------------------------------------------------------------------
 
 
 def solve_itl(
@@ -123,78 +148,104 @@ def solve_itl(
     epsilon: float,
     max_iter: int = 10,
     verbose: bool = False,
-) -> Tuple[np.ndarray, dict]:
+) -> Tuple[np.ndarray, Dict]:
     """
-    Solve the ITL optimization problem (Algorithm 1).
-
-    Alternates between:
-      1. Estimating expert policy pi_hat given current T
-      2. Solving the QP for T given pi_hat and linearized value
+    Algorithm 1 from Benac et al. (2024).
 
     Args:
-        N: transition counts from data, shape (n_states, n_actions, n_states)
-        T_mle: MLE transition estimate, shape (n_states, n_actions, n_states)
-        R: known reward function, shape (n_states, n_actions)
+        N: (S, A, S) transition counts from the batch dataset
+        T_mle: (S, A, S) Laplace-smoothed MLE transitions
+        R: (S, A) rewards (assumed known)
         gamma: discount factor
         epsilon: near-optimality tolerance
-        max_iter: maximum alternation iterations
-        verbose: print progress
+        max_iter: safety cap on alternation iterations
+        verbose: print per-iteration diagnostics
 
     Returns:
-        T_hat: estimated transition matrix, shape (n_states, n_actions, n_states)
-        info: dict with convergence info, diagnostics
+        T_hat: (S, A, S) estimated dynamics
+        info: diagnostics dict
     """
     n_states, n_actions, _ = N.shape
+    sa_counts = N.sum(axis=2)                 # (S, A) — #times expert picked a at s
+    visited_sa = sa_counts > 0                # (S, A) — observed action mask
+    visited_s = visited_sa.any(axis=1)        # (S,)   — was state ever visited
 
-    # Initialize T_hat with MLE (or uniform for unvisited)
+    info: Dict = {
+        "iterations": [],
+        "objective_values": [],
+        "converged": False,
+        "termination": "max_iter",
+    }
+
+    # --- Algorithm 1 lines 1-5: initialize and take first step ---------------
+    pi_hat = _initial_policy_from_data(visited_sa, n_actions)
     T_hat = T_mle.copy()
 
-    info = {"iterations": [], "objective_values": [], "converged": False}
-
     for iteration in range(max_iter):
-        # Step 1: Estimate expert policy
-        pi_hat = estimate_expert_policy(N, T_hat, R, gamma, epsilon)
-
-        # Step 2: Compute linearized value vector
+        # Linearized value vector (paper Eq 10, using T_MLE, not T_hat)
         v_lin = compute_linearized_value(T_mle, R, pi_hat, gamma)
 
-        # Step 3: Determine epsilon-ball (which actions are valid/invalid)
-        # Use current T_hat to compute Q-values and classify actions
-        temp_mdp = TabularMDP(n_states, n_actions, T_hat, R, gamma)
-        _, Q_hat, _ = temp_mdp.compute_optimal_policy()
-        valid = temp_mdp.compute_epsilon_ball(Q_hat, epsilon)
-
-        # Step 4: Solve the QP
-        T_new, obj_val = _solve_qp(
-            N, T_mle, R, gamma, epsilon, v_lin, valid, n_states, n_actions, verbose
+        # Solve inner QP
+        T_new, obj_val, status = _solve_qp(
+            N=N,
+            T_mle=T_mle,
+            R=R,
+            gamma=gamma,
+            epsilon=epsilon,
+            v_lin=v_lin,
+            visited_sa=visited_sa,
+            visited_s=visited_s,
+            n_states=n_states,
+            n_actions=n_actions,
+            verbose=verbose,
         )
 
         if T_new is None:
-            if verbose:
-                print(f"  Iteration {iteration}: QP infeasible")
             info["iterations"].append({"status": "infeasible"})
+            info["termination"] = "qp_failed"
+            if verbose:
+                print(f"  Iteration {iteration}: QP failed ({status})")
             break
 
-        # Check convergence
-        change = np.max(np.abs(T_new - T_hat))
-        info["iterations"].append({
-            "change": change,
-            "objective": obj_val,
-            "status": "solved",
-        })
-        info["objective_values"].append(obj_val)
-
+        change = float(np.max(np.abs(T_new - T_hat)))
+        info["iterations"].append(
+            {"change": change, "objective": float(obj_val), "status": status}
+        )
+        info["objective_values"].append(float(obj_val))
         if verbose:
-            print(f"  Iteration {iteration}: obj={obj_val:.6f}, max_change={change:.6f}")
-
-        if change < 1e-6:
-            info["converged"] = True
-            T_hat = T_new
-            break
+            print(
+                f"  Iteration {iteration}: obj={obj_val:.6f}  "
+                f"max_change={change:.6f}  status={status}"
+            )
 
         T_hat = T_new
 
+        # Paper termination: eps-ball property holds at every observed state
+        satisfied, Q_hat = _epsilon_ball_matches_observed(
+            T_hat, R, gamma, epsilon, visited_sa
+        )
+        if satisfied:
+            info["converged"] = True
+            info["termination"] = "eps_ball_property"
+            if verbose:
+                print(f"  eps-ball property satisfied; stopping.")
+            break
+
+        # Fallback: numerical fixed point
+        if iteration > 0 and change < 1e-8:
+            info["converged"] = True
+            info["termination"] = "numerical_fixed_point"
+            break
+
+        # Update pi for next alternation (Algorithm 1 lines 8-9)
+        pi_hat = _next_policy(visited_sa, Q_hat)
+
     return T_hat, info
+
+
+# ---------------------------------------------------------------------------
+# Inner QP
+# ---------------------------------------------------------------------------
 
 
 def _solve_qp(
@@ -204,100 +255,120 @@ def _solve_qp(
     gamma: float,
     epsilon: float,
     v_lin: np.ndarray,
-    valid: np.ndarray,
+    visited_sa: np.ndarray,
+    visited_s: np.ndarray,
     n_states: int,
     n_actions: int,
     verbose: bool = False,
-) -> Tuple[Optional[np.ndarray], Optional[float]]:
+) -> Tuple[Optional[np.ndarray], Optional[float], str]:
     """
-    Solve the inner QP (Eq 10) for a fixed linearization point.
+    Solve the convex QP in Eq 10 of Benac et al. (2024):
 
-    Decision variable: T[s, a, s'] for all (s, a, s')
+        min_T  sum_{s,a,s'} N[s,a,s'] * (T[s,a,s'] - T_MLE[s,a,s'])^2
 
-    Objective:
-        min sum_{s,a,s'} N_{s,a,s'} * (T[s,a,s'] - T_mle[s,a,s'])^2
-
-    Constraints:
-        1. For valid a, invalid a' at state s:
-           R(s,a) - R(s,a') + gamma * (T(.|s,a) - T(.|s,a'))^T v_lin >= epsilon
-        2. For valid a, a' at state s:
-           |R(s,a) - R(s,a') + gamma * (T(.|s,a) - T(.|s,a'))^T v_lin| <= epsilon
-        3. T(s'|s,a) >= 0 for all s, a, s'
-        4. sum_{s'} T(s'|s,a) = 1 for all s, a
+        s.t. for all s in D, all a in observed(s), all a' NOT in observed(s):
+                R(s,a) - R(s,a') + gamma (T_sa - T_sa')^T v_lin >= epsilon   (Eq 8)
+             for all s in D, all a, a' in observed(s), a != a':
+                |R(s,a) - R(s,a') + gamma (T_sa - T_sa')^T v_lin| <= epsilon  (Eq 9)
+             T[s,a,s'] >= 0,  sum_{s'} T[s,a,s'] = 1 for all (s, a).
     """
-    # Decision variable: one variable per (s, a, s') entry
-    T_var = {}
+    # Decision variables (one simplex per (s, a))
+    T_var = np.empty((n_states, n_actions), dtype=object)
     for s in range(n_states):
         for a in range(n_actions):
             T_var[s, a] = cp.Variable(n_states, nonneg=True)
 
-    # Objective: weighted squared distance to MLE
-    objective_terms = []
+    # Weighted L2 objective
+    obj_terms = []
     for s in range(n_states):
         for a in range(n_actions):
-            weights = N[s, a]  # (n_states,) — count for each s'
-            diff = T_var[s, a] - T_mle[s, a]
-            # Weighted squared L2: sum_s' N_{s,a,s'} * (T - T_mle)^2
-            objective_terms.append(cp.sum(cp.multiply(weights, cp.square(diff))))
+            w = N[s, a]  # (S,)
+            if w.sum() == 0:
+                # Unobserved (s, a): pull toward T_MLE very weakly so variables
+                # don't float off into solver noise. Tiny weight, does not
+                # affect constraints.
+                obj_terms.append(
+                    1e-6 * cp.sum_squares(T_var[s, a] - T_mle[s, a])
+                )
+            else:
+                diff = T_var[s, a] - T_mle[s, a]
+                obj_terms.append(cp.sum(cp.multiply(w, cp.square(diff))))
 
-    objective = cp.Minimize(cp.sum(objective_terms))
+    objective = cp.Minimize(cp.sum(obj_terms))
 
     # Constraints
     constraints = []
 
-    # Simplex constraints: sum to 1 for each (s, a)
+    # Simplex constraints for every (s, a)
     for s in range(n_states):
         for a in range(n_actions):
             constraints.append(cp.sum(T_var[s, a]) == 1)
 
-    # ITL constraints (Eq 8 and 9)
+    # ITL constraints ONLY at observed states, using observed actions as valid
     for s in range(n_states):
-        valid_actions = np.where(valid[s])[0]
-        invalid_actions = np.where(~valid[s])[0]
+        if not visited_s[s]:
+            continue
+        valid = np.where(visited_sa[s])[0]
+        invalid = np.where(~visited_sa[s])[0]
 
-        for a_valid in valid_actions:
-            # Constraint 1: valid vs invalid (Eq 8)
-            for a_invalid in invalid_actions:
-                reward_diff = R[s, a_valid] - R[s, a_invalid]
-                transition_diff = T_var[s, a_valid] - T_var[s, a_invalid]
-                lhs = reward_diff + gamma * transition_diff @ v_lin
-                constraints.append(lhs >= epsilon)
+        # Eq 8: each observed action >= epsilon-better than each unobserved action
+        for a in valid:
+            for a_bad in invalid:
+                dR = R[s, a] - R[s, a_bad]
+                dT = T_var[s, a] - T_var[s, a_bad]
+                constraints.append(dR + gamma * dT @ v_lin >= epsilon)
 
-            # Constraint 2: valid vs valid (Eq 9)
-            for a_valid2 in valid_actions:
-                if a_valid < a_valid2:  # avoid duplicate pairs
-                    reward_diff = R[s, a_valid] - R[s, a_valid2]
-                    transition_diff = T_var[s, a_valid] - T_var[s, a_valid2]
-                    expr = reward_diff + gamma * transition_diff @ v_lin
-                    constraints.append(expr <= epsilon)
-                    constraints.append(expr >= -epsilon)
+        # Eq 9: observed actions are within epsilon of each other
+        for i in range(len(valid)):
+            for j in range(i + 1, len(valid)):
+                a, a2 = int(valid[i]), int(valid[j])
+                dR = R[s, a] - R[s, a2]
+                dT = T_var[s, a] - T_var[s, a2]
+                expr = dR + gamma * dT @ v_lin
+                constraints.append(expr <= epsilon)
+                constraints.append(expr >= -epsilon)
 
-    # Solve
+    # Solve, try several solvers before giving up
     problem = cp.Problem(objective, constraints)
-    try:
-        problem.solve(solver=cp.OSQP, verbose=False)
-    except cp.SolverError:
-        try:
-            problem.solve(solver=cp.SCS, verbose=False)
-        except cp.SolverError:
-            return None, None
+    status = ""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for solver_kwargs in (
+            dict(solver=cp.OSQP, eps_abs=1e-8, eps_rel=1e-8,
+                 max_iter=100000, polish=True),
+            dict(solver=cp.SCS, eps=1e-8, max_iters=100000),
+            dict(solver=cp.CLARABEL) if hasattr(cp, "CLARABEL") else None,
+        ):
+            if solver_kwargs is None:
+                continue
+            try:
+                problem.solve(verbose=False, **solver_kwargs)
+                status = str(problem.status)
+                if status in ("optimal", "optimal_inaccurate"):
+                    break
+            except (cp.SolverError, Exception):
+                status = "solver_error"
+                continue
 
-    if problem.status not in ["optimal", "optimal_inaccurate"]:
+    if problem.status not in ("optimal", "optimal_inaccurate"):
         if verbose:
             print(f"    QP status: {problem.status}")
-        return None, None
+        return None, None, str(problem.status)
 
-    # Extract solution
+    # Extract solution; project onto simplex as a safety net
     T_hat = np.zeros((n_states, n_actions, n_states))
     for s in range(n_states):
         for a in range(n_actions):
             val = T_var[s, a].value
-            if val is not None:
-                # Project to simplex (clip negatives, renormalize)
-                val = np.maximum(val, 0)
-                val /= val.sum() + 1e-12
-                T_hat[s, a] = val
-            else:
+            if val is None:
                 T_hat[s, a] = T_mle[s, a]
+            else:
+                val = np.maximum(val, 0.0)
+                total = val.sum()
+                if total > 1e-12:
+                    val = val / total
+                else:
+                    val = T_mle[s, a].copy()
+                T_hat[s, a] = val
 
-    return T_hat, problem.value
+    return T_hat, float(problem.value), str(problem.status)

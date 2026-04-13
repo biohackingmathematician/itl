@@ -66,6 +66,14 @@ def main():
     N_WORLDS = 5                   # MVR: 5 worlds (paper: 20)
     N_DATASETS_PER_WORLD = 2       # MVR: 2 datasets/world (paper: 5)
 
+    os.makedirs("results/checkpoints", exist_ok=True)
+    ckpt_path = "results/checkpoints/randomworld_runs.json"
+    if os.path.exists(ckpt_path):
+        with open(ckpt_path) as f:
+            checkpoint = json.load(f)
+    else:
+        checkpoint = {}
+
     rows = []
     for coverage in COVERAGES:
         mle_runs = {k: [] for k in ["normalized_value", "best_matching",
@@ -84,18 +92,25 @@ def main():
             )
 
             for data_seed in range(N_DATASETS_PER_WORLD):
-                combined_seed = 1000 * world_seed + data_seed
-                N, T_mle, _ = generate_batch_dataset(
-                    mdp, pi_expert, coverage=coverage, K=K,
-                    delta=DELTA, seed=combined_seed,
-                )
-                T_hat, _ = solve_itl(
-                    N, T_mle, mdp.R, mdp.gamma,
-                    epsilon=EPSILON, max_iter=10, verbose=False,
-                )
-
-                mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON)
-                itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON)
+                key = f"{coverage}:{world_seed}:{data_seed}"
+                if key in checkpoint:
+                    mle_metrics = checkpoint[key]["mle"]
+                    itl_metrics = checkpoint[key]["itl"]
+                else:
+                    combined_seed = 1000 * world_seed + data_seed
+                    N, T_mle, _ = generate_batch_dataset(
+                        mdp, pi_expert, coverage=coverage, K=K,
+                        delta=DELTA, seed=combined_seed,
+                    )
+                    T_hat, _ = solve_itl(
+                        N, T_mle, mdp.R, mdp.gamma,
+                        epsilon=EPSILON, max_iter=10, verbose=False,
+                    )
+                    mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON)
+                    itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON)
+                    checkpoint[key] = {"mle": mle_metrics, "itl": itl_metrics}
+                    with open(ckpt_path, "w") as f:
+                        json.dump(checkpoint, f)
                 for k in mle_runs:
                     mle_runs[k].append(mle_metrics[k])
                     itl_runs[k].append(itl_metrics[k])

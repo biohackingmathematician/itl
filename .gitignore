@@ -11,3 +11,4 @@ build/
 
 # MVR experiment logs
 results/logs/
+results/checkpoints/
