@@ -2,8 +2,11 @@
 Gridworld reproduction — Benac et al. (2024), Table 4 (Gridworld, 40% stochastic
 expert, standard task) and Figure 2 (Normalized Value vs. Coverage).
 
-This is the MVR (minimum viable reproduction) version: fewer seeds than the
-paper's 50 to keep runtime manageable. Error bars will be wider than published.
+Default (fast) run: computes MLE and ITL columns only.
+Set RUN_BASELINES=1 to also compute PS and MCE columns (paper Table 4
+baselines that BITL/ITL are supposed to beat).
+Set RUN_BITL=1 to additionally compute BITL posterior-mean and Value CVaR.
+BITL is slowest (HMC over the constrained simplex), so it's gated.
 """
 
 import os
@@ -25,6 +28,8 @@ from src.utils import (
     transition_mse,
     summarize_runs,
     plot_coverage_sensitivity,
+    value_cvar_from_T_distribution,
+    value_cvar_from_point_T,
 )
 from src.mdp import TabularMDP
 
@@ -51,14 +56,75 @@ def evaluate(T_hat, R, gamma, true_mdp, epsilon, start_state):
     }
 
 
+def _value_cvar_block(T_dist_samples, R, gamma, true_mdp, start_state, seed=None):
+    """Compute Value CVaR at 1%, 2%, 5% from a (K, S, A, S) sample stack."""
+    return {
+        f"value_cvar_{int(a*100)}": value_cvar_from_T_distribution(
+            T_dist_samples, R, gamma, true_mdp, alpha=a, start_state=start_state,
+        )
+        for a in (0.01, 0.02, 0.05)
+    }
+
+
 def run_one(mdp, pi_expert, coverage, epsilon, K, delta, seed):
+    """Generate batch data and compute every method's T estimate.
+
+    Returns a dict {method_name: T_hat or sample_stack} plus the data N.
+    Methods marked "samples" return (K, S, A, S) posterior samples; the
+    point-estimate methods return just (S, A, S).
+
+    Gated by RUN_BASELINES (PS, MCE) and RUN_BITL env vars to keep the
+    fast path fast.
+    """
     N, T_mle, _ = generate_batch_dataset(
         mdp, pi_expert, coverage=coverage, K=K, delta=delta, seed=seed
     )
-    T_hat, _ = solve_itl(
+    T_itl, _ = solve_itl(
         N, T_mle, mdp.R, mdp.gamma, epsilon=epsilon, max_iter=10, verbose=False
     )
-    return T_mle, T_hat, N
+
+    out = {"mle_T": T_mle, "itl_T": T_itl}
+
+    if os.environ.get("RUN_BASELINES", "0") == "1":
+        # PS = unconstrained Dir-Categorical posterior. Fast.
+        from src.ps_baseline import ps_sample, ps_point_estimate
+        ps_samples, _ = ps_sample(N, delta=delta, n_samples=200, seed=seed)
+        out["ps_T"] = ps_point_estimate(N, delta=delta)
+        out["ps_samples"] = ps_samples
+
+        # MCE = MaxCausalEnt with simultaneous T+R inference. Uses one-hot
+        # state-action features so we don't impose a hand-designed
+        # feature map at this stage.
+        from src.mce_baseline import mce_solve
+        n_states, n_actions = mdp.n_states, mdp.n_actions
+        Phi = np.zeros((n_states, n_actions, n_states * n_actions))
+        for s in range(n_states):
+            for a in range(n_actions):
+                Phi[s, a, s * n_actions + a] = 1.0
+        try:
+            T_mce, w_mce, _ = mce_solve(N, Phi, mdp.gamma, delta=delta,
+                                         max_outer=3, verbose=False)
+            out["mce_T"] = T_mce
+        except Exception as e:
+            out["mce_T"] = None
+            out["mce_error"] = str(e)
+
+    if os.environ.get("RUN_BITL", "0") == "1":
+        from src.bitl import bitl_sample
+        try:
+            samples, _ = bitl_sample(
+                N, T_mle, mdp.R, mdp.gamma, epsilon=epsilon,
+                n_samples=200, n_warmup=100,
+                step_size=0.005, n_leapfrog=10, delta=delta,
+                T_init=T_itl, seed=seed, verbose=False,
+            )
+            out["bitl_T"] = samples.mean(axis=0)
+            out["bitl_samples"] = samples
+        except Exception as e:
+            out["bitl_T"] = None
+            out["bitl_error"] = str(e)
+
+    return N, out
 
 
 def main():
@@ -116,57 +182,98 @@ def main():
     else:
         checkpoint = {}
 
+    # Methods this run will compute. Always at least mle + itl. Extras are
+    # opt-in via env var to keep the fast path fast.
+    methods = ["mle", "itl"]
+    if os.environ.get("RUN_BASELINES", "0") == "1":
+        methods += ["ps", "mce"]
+    if os.environ.get("RUN_BITL", "0") == "1":
+        methods += ["bitl"]
+
+    metric_keys = ["normalized_value", "best_matching", "epsilon_matching",
+                    "total_variation", "n_violations", "mse"]
+
     rows = []
     for coverage in COVERAGES:
-        mle_runs = {k: [] for k in ["normalized_value", "best_matching",
-                                     "epsilon_matching", "total_variation",
-                                     "n_violations", "mse"]}
-        itl_runs = {k: [] for k in mle_runs}
+        per_method_runs = {m: {k: [] for k in metric_keys} for m in methods}
 
         for seed in range(N_SEEDS):
             key = f"{coverage}:{seed}"
-            if key in checkpoint:
-                mle_metrics = checkpoint[key]["mle"]
-                itl_metrics = checkpoint[key]["itl"]
-            else:
-                T_mle, T_hat, _ = run_one(
+            entry = checkpoint.get(key, {})
+
+            # Re-use cached metrics for any methods already present, compute
+            # the missing ones from scratch in a single run_one call.
+            # An entry is "stale" if it lacks CVaR keys — those were added
+            # later, so old checkpoints predate them. Treat stale = missing.
+            def _stale(m):
+                em = entry.get(m)
+                return em is not None and "value_cvar_5" not in em
+            missing_methods = [
+                m for m in methods if (m not in entry) or _stale(m)
+            ]
+            if missing_methods:
+                N, T_outputs = run_one(
                     mdp, pi_expert, coverage, EPSILON, K, DELTA, seed=seed
                 )
-                mle_metrics = evaluate(T_mle, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
-                itl_metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
-                checkpoint[key] = {"mle": mle_metrics, "itl": itl_metrics}
+                for m in missing_methods:
+                    T_hat = T_outputs.get(f"{m}_T")
+                    if T_hat is None:
+                        # Method failed (e.g., MCE solver error).
+                        entry[m] = None
+                        continue
+                    metrics = evaluate(T_hat, mdp.R, mdp.gamma, mdp, EPSILON, start_state)
+                    # Add Value CVaR. Use posterior samples when available
+                    # (BITL, PS), bootstrap from Dir(N + delta) otherwise.
+                    sample_key = f"{m}_samples"
+                    if sample_key in T_outputs:
+                        cvar = _value_cvar_block(
+                            T_outputs[sample_key], mdp.R, mdp.gamma, mdp,
+                            start_state,
+                        )
+                    else:
+                        cvar = {
+                            f"value_cvar_{int(a*100)}": value_cvar_from_point_T(
+                                T_hat, N, mdp.R, mdp.gamma, mdp,
+                                alpha=a, start_state=start_state,
+                                n_bootstrap=100, delta=DELTA, seed=seed,
+                            )
+                            for a in (0.01, 0.02, 0.05)
+                        }
+                    metrics.update(cvar)
+                    entry[m] = metrics
+
+                checkpoint[key] = entry
                 with open(ckpt_path, "w") as f:
                     json.dump(checkpoint, f)
-            for k in mle_runs:
-                mle_runs[k].append(mle_metrics[k])
-                itl_runs[k].append(itl_metrics[k])
+
+            for m in methods:
+                metrics = entry.get(m)
+                if metrics is None:
+                    continue
+                for k in metric_keys:
+                    per_method_runs[m][k].append(metrics[k])
 
         row = {"coverage": coverage}
-        for k in mle_runs:
-            m_mean, m_std = summarize_runs(mle_runs[k])
-            i_mean, i_std = summarize_runs(itl_runs[k])
-            row[f"mle_{k}_mean"] = m_mean
-            row[f"mle_{k}_std"] = m_std
-            row[f"itl_{k}_mean"] = i_mean
-            row[f"itl_{k}_std"] = i_std
+        for m in methods:
+            for k in metric_keys:
+                if per_method_runs[m][k]:
+                    mean_, std_ = summarize_runs(per_method_runs[m][k])
+                    row[f"{m}_{k}_mean"] = mean_
+                    row[f"{m}_{k}_std"] = std_
         rows.append(row)
 
-        print(f"\n  Coverage = {coverage:.1f}  "
-              f"(avg over {N_SEEDS} seeds)")
-        print(f"    Normalized Value  MLE: {row['mle_normalized_value_mean']:+.3f} "
-              f"± {row['mle_normalized_value_std']:.3f}   "
-              f"ITL: {row['itl_normalized_value_mean']:+.3f} "
-              f"± {row['itl_normalized_value_std']:.3f}")
-        print(f"    Best matching     MLE: {row['mle_best_matching_mean']:.3f} "
-              f"± {row['mle_best_matching_std']:.3f}   "
-              f"ITL: {row['itl_best_matching_mean']:.3f} "
-              f"± {row['itl_best_matching_std']:.3f}")
-        print(f"    ε-matching        MLE: {row['mle_epsilon_matching_mean']:.3f} "
-              f"± {row['mle_epsilon_matching_std']:.3f}   "
-              f"ITL: {row['itl_epsilon_matching_mean']:.3f} "
-              f"± {row['itl_epsilon_matching_std']:.3f}")
-        print(f"    Violations        MLE: {row['mle_n_violations_mean']:.2f}   "
-              f"ITL: {row['itl_n_violations_mean']:.2f}")
+        # Console summary: ITL vs MLE always; baselines if present.
+        print(f"\n  Coverage = {coverage:.1f}  (avg over {N_SEEDS} seeds)")
+        for m in methods:
+            nv_mean = row.get(f"{m}_normalized_value_mean")
+            nv_std = row.get(f"{m}_normalized_value_std")
+            bm_mean = row.get(f"{m}_best_matching_mean")
+            bm_std = row.get(f"{m}_best_matching_std")
+            if nv_mean is None:
+                continue
+            print(f"    {m.upper():<5s}  NV: {nv_mean:+.3f} ± {nv_std:.3f}   "
+                  f"BM: {bm_mean:.3f} ± {bm_std:.3f}   "
+                  f"viol: {row.get(f'{m}_n_violations_mean', 0):.2f}")
 
     # Save (output table also namespaced by stochastic fraction).
     os.makedirs("results/tables", exist_ok=True)

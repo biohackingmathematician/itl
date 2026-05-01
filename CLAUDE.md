@@ -124,6 +124,12 @@ python -m experiments.run_gridworld     # ~minutes at N_SEEDS=10
 python -m experiments.run_randomworld   # ~minutes
 ```
 
+### Tests
+
+```bash
+python -m pytest tests/                     # 8 smoke tests, ~5 s
+```
+
 ### Overnight runbook (recommended order)
 
 These commands all checkpoint per-seed/per-world to
@@ -132,33 +138,46 @@ the repo root in a regular Mac Terminal (NOT Cowork — the 45-second bash
 ceiling makes long runs impractical there). Each command produces a
 namespaced output table that doesn't clobber the others.
 
+**Method columns:** by default each script computes only MLE and ITL
+columns. Set `RUN_BASELINES=1` to additionally compute PS and MCE columns
+(both are paper Table 4 baselines). Set `RUN_BITL=1` to additionally
+compute BITL posterior mean (HMC sampler, slowest). For the full Table 4
+sweep below, set both.
+
 1. **40% stochastic baseline at full seed counts (paper Table 4)**
    ```bash
-   N_SEEDS=50 python -m experiments.run_gridworld
-   N_WORLDS=20 N_DATASETS=5 python -m experiments.run_randomworld
+   RUN_BASELINES=1 RUN_BITL=1 N_SEEDS=50 \
+     python -m experiments.run_gridworld
+   RUN_BASELINES=1 RUN_BITL=1 N_WORLDS=20 N_DATASETS=5 \
+     python -m experiments.run_randomworld
    ```
 
 2. **Transfer task (paper Table 4 transfer columns)**
    ```bash
-   ENV=both N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
+   RUN_BASELINES=1 RUN_BITL=1 ENV=both \
+     N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
      python -m experiments.run_transfer
    ```
 
 3. **20% stochastic ablation (paper Table 5)**
    ```bash
-   STOCHASTIC_FRACTION=0.2 N_SEEDS=50 python -m experiments.run_gridworld
-   STOCHASTIC_FRACTION=0.2 N_WORLDS=20 N_DATASETS=5 \
-     python -m experiments.run_randomworld
-   STOCHASTIC_FRACTION=0.2 ENV=both N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
+   STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 \
+     N_SEEDS=50 python -m experiments.run_gridworld
+   STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 \
+     N_WORLDS=20 N_DATASETS=5 python -m experiments.run_randomworld
+   STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 ENV=both \
+     N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
      python -m experiments.run_transfer
    ```
 
 4. **0% stochastic ablation (paper Table 6)**
    ```bash
-   STOCHASTIC_FRACTION=0.0 N_SEEDS=50 python -m experiments.run_gridworld
-   STOCHASTIC_FRACTION=0.0 N_WORLDS=20 N_DATASETS=5 \
-     python -m experiments.run_randomworld
-   STOCHASTIC_FRACTION=0.0 ENV=both N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
+   STOCHASTIC_FRACTION=0.0 RUN_BASELINES=1 RUN_BITL=1 \
+     N_SEEDS=50 python -m experiments.run_gridworld
+   STOCHASTIC_FRACTION=0.0 RUN_BASELINES=1 RUN_BITL=1 \
+     N_WORLDS=20 N_DATASETS=5 python -m experiments.run_randomworld
+   STOCHASTIC_FRACTION=0.0 RUN_BASELINES=1 RUN_BITL=1 ENV=both \
+     N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 \
      python -m experiments.run_transfer
    ```
 

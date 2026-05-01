@@ -16,16 +16,16 @@ The key insight is that an expert's near-optimal behavior constrains what the en
 ## Experiments to Reproduce
 
 ### 1. Gridworld (Synthetic)
-- **Input**: 5x5 grid, 25 states, 4 actions (up/down/left/right), known reward R, discount gamma=0.9
+- **Input**: 5x5 grid, 25 states, 4 actions (up/down/left/right), known reward R, discount gamma=0.95 (paper value; the v1 scaffold used 0.9)
 - **Data**: Simulated expert trajectories (N transitions per state-action pair), fully synthetic
 - **Output**: Estimated T_hat via ITL QP, MSE vs true T*, comparison to MLE baseline
-- **Target**: Reproduce Table 1 (MSE comparison) and Figure 1 (epsilon sensitivity)
+- **Target**: Reproduce Table 4 (paper metrics: best matching, ε-matching, normalized value, total variation, # constraints violated, value CVaR) and Figure 2 (Normalized Value vs. coverage). Tables 5 and 6 are the 20% and 0% stochastic-policy-state ablations of the same metrics.
 
 ### 2. RandomWorld (Synthetic)
 - **Input**: Randomly generated MDP, 15 states, 5 actions, random transition matrices
 - **Data**: Simulated expert trajectories, fully synthetic
 - **Output**: Same as Gridworld — MSE comparison, epsilon sensitivity
-- **Target**: Reproduce Table 1 RandomWorld columns
+- **Target**: Reproduce Table 4 RandomWorld columns and Figure 2 bottom row
 
 ### 3. MIMIC-IV (Real Clinical Data)
 - **Input**: ICU hypotension patient trajectories from MIMIC-IV (Beth Israel Deaconess), following the first-review framing of Benac et al.'s Section 5.3

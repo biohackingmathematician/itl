@@ -261,21 +261,65 @@ def value_cvar_from_point_T(
     seed: Optional[int] = None,
 ) -> float:
     """
-    CVaR for a point-estimate method by Dirichlet bootstrap centered on T_hat.
+    CVaR for a point-estimate method, "robustness of method's policy" variant.
 
-    The paper's CVaR columns for MLE/ITL/MCE/PS need *some* distribution
-    over T to define a tail. We use Dir(N + delta) bootstrapping. T_hat is
-    used for the policy step (so the policy reflects the method's point
-    estimate); the bootstrap T's are only used to evaluate that policy's
-    value under TRUE dynamics — same definition as
-    `value_cvar_from_T_distribution`.
+    The method's policy is FIXED at pi* = pi*(T_hat, R). For each Dir(N+δ)
+    bootstrap sample T_i, we evaluate that policy under T_i:
+        V_i = V^{pi*}(s_0; T_i, R)
+    CVaR_alpha is the lower-tail mean of {V_i}.
 
-    See docstring on the limitation: paper methodology not directly verified.
+    This differs from `value_cvar_from_T_distribution` (used for BITL/PS),
+    which re-derives a *new* optimal policy per posterior sample. The
+    difference matters: for point-estimate methods we want "is the method's
+    chosen policy robust to noise in T?", not "if T were T_i, what would
+    the optimal policy do?"
+
+    Pre-fix (≤ 2026-04-30) this function used the BITL-style version, with
+    the consequence that MLE / ITL / MCE all produced *identical* CVaR
+    numbers because the policy step ignored `T_hat` entirely. That meant
+    the CVaR column couldn't distinguish methods.
+
+    Caveat: paper methodology section was not directly read this session,
+    so this is the most natural defensible interpretation rather than a
+    verified replica. Treat the CVaR column as "qualitative differentiation
+    of methods" until verified.
+
+    Args:
+        T_hat: the method's point estimate of T.
+        N: transition counts, used only to define the bootstrap distribution.
+        R: reward function (n_states, n_actions).
+        gamma: discount factor.
+        true_mdp: true MDP whose dynamics define the bootstrap base.
+        alpha: tail level (0.01, 0.02, 0.05 in the paper).
+        start_state: state to evaluate at; None averages over uniform initial.
+        n_bootstrap: number of bootstrap samples K.
+        delta: Dirichlet pseudo-count.
+        seed: RNG seed.
     """
+    n_states = true_mdp.n_states
+    n_actions = true_mdp.n_actions
+
+    # Fix the method's policy.
+    mdp_method = TabularMDP(n_states, n_actions, T_hat, R, gamma)
+    _, _, pi_method = mdp_method.compute_optimal_policy()
+
+    # Bootstrap dynamics samples from Dir(N + delta).
     T_samples = bootstrap_T_samples(N, delta=delta, n_samples=n_bootstrap, seed=seed)
-    return value_cvar_from_T_distribution(
-        T_samples, R, gamma, true_mdp, alpha=alpha, start_state=start_state
-    )
+
+    V_samples = np.zeros(n_bootstrap)
+    for i in range(n_bootstrap):
+        mdp_i = TabularMDP(n_states, n_actions, T_samples[i], R, gamma)
+        V_under_i = mdp_i.compute_value_function(pi_method)
+        V_samples[i] = (
+            V_under_i[start_state] if start_state is not None
+            else V_under_i.mean()
+        )
+
+    threshold = np.percentile(V_samples, alpha * 100.0)
+    tail = V_samples[V_samples <= threshold]
+    if len(tail) == 0:
+        return float(V_samples.min())
+    return float(tail.mean())
 
 
 # =============================================================================
@@ -283,9 +327,18 @@ def value_cvar_from_point_T(
 # =============================================================================
 
 def summarize_runs(values: list) -> Tuple[float, float]:
-    """Return (mean, std) over a list of scalar values."""
+    """Return (mean, std) over a list of scalar values.
+
+    Edge cases:
+      - empty list → (NaN, NaN), no warning
+      - single element → (value, 0.0)
+    """
     arr = np.asarray(values, dtype=float)
-    return float(arr.mean()), float(arr.std(ddof=1)) if len(arr) > 1 else 0.0
+    if arr.size == 0:
+        return float("nan"), float("nan")
+    if arr.size == 1:
+        return float(arr[0]), 0.0
+    return float(arr.mean()), float(arr.std(ddof=1))
 
 
 # =============================================================================

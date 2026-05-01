@@ -54,8 +54,6 @@ from typing import Optional, Tuple, Dict
 
 from scipy.optimize import minimize
 
-from .mdp import TabularMDP
-
 
 # ---------------------------------------------------------------------------
 # Soft-Bellman backup (the policy form MaxCausalEnt assumes the expert uses)

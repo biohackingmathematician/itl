@@ -48,6 +48,59 @@ EPSILON = 5.0
 COVERAGES = [0.2, 0.4, 0.6, 0.8, 1.0]
 
 
+def _learn_all_methods(mdp_std, pi_expert, coverage, K, delta, epsilon, seed, methods):
+    """Generate batch data on the standard task and return T estimates per
+    method. Mirrors run_gridworld.run_one but keeps methods opt-in.
+
+    Note: the dataset is generated on the STANDARD reward (the agent
+    learning the dynamics doesn't see the transfer reward). This matches
+    the paper's transfer setup.
+    """
+    N, T_mle, _ = generate_batch_dataset(
+        mdp_std, pi_expert, coverage=coverage, K=K, delta=delta, seed=seed,
+    )
+    out = {}
+    if "mle" in methods:
+        out["mle_T"] = T_mle
+    if "itl" in methods:
+        T_itl, _ = solve_itl(N, T_mle, mdp_std.R, mdp_std.gamma,
+                              epsilon=epsilon, max_iter=10, verbose=False)
+        out["itl_T"] = T_itl
+    if "ps" in methods:
+        from src.ps_baseline import ps_point_estimate
+        out["ps_T"] = ps_point_estimate(N, delta=delta)
+    if "mce" in methods:
+        from src.mce_baseline import mce_solve
+        n_states, n_actions = mdp_std.n_states, mdp_std.n_actions
+        Phi = np.zeros((n_states, n_actions, n_states * n_actions))
+        for s in range(n_states):
+            for a in range(n_actions):
+                Phi[s, a, s * n_actions + a] = 1.0
+        try:
+            T_mce, _, _ = mce_solve(N, Phi, mdp_std.gamma, delta=delta,
+                                     max_outer=3, verbose=False)
+            out["mce_T"] = T_mce
+        except Exception:
+            out["mce_T"] = None
+    if "bitl" in methods:
+        from src.bitl import bitl_sample
+        T_init = out.get("itl_T")
+        if T_init is None:
+            T_init, _ = solve_itl(N, T_mle, mdp_std.R, mdp_std.gamma,
+                                   epsilon=epsilon, max_iter=10, verbose=False)
+        try:
+            samples, _ = bitl_sample(
+                N, T_mle, mdp_std.R, mdp_std.gamma, epsilon=epsilon,
+                n_samples=200, n_warmup=100,
+                step_size=0.005, n_leapfrog=10, delta=delta,
+                T_init=T_init, seed=seed, verbose=False,
+            )
+            out["bitl_T"] = samples.mean(axis=0)
+        except Exception:
+            out["bitl_T"] = None
+    return out
+
+
 def _evaluate_transfer(T_hat, true_mdp_transfer, epsilon, start_state):
     """Score T_hat under the transfer-task MDP (transfer reward, true dynamics)."""
     n_states, n_actions = true_mdp_transfer.n_states, true_mdp_transfer.n_actions
@@ -91,41 +144,57 @@ def run_gridworld_transfer(stochastic_fraction, n_seeds):
     os.makedirs("results/checkpoints", exist_ok=True)
     checkpoint = json.load(open(ckpt_path)) if os.path.exists(ckpt_path) else {}
 
+    methods = ["mle", "itl"]
+    if os.environ.get("RUN_BASELINES", "0") == "1":
+        methods += ["ps", "mce"]
+    if os.environ.get("RUN_BITL", "0") == "1":
+        methods += ["bitl"]
+
+    metric_keys = ["normalized_value_transfer", "best_matching_transfer",
+                    "epsilon_matching_transfer", "n_violations_transfer"]
+
     rows = []
     for coverage in COVERAGES:
-        mle_runs = {k: [] for k in ["normalized_value_transfer", "best_matching_transfer",
-                                     "epsilon_matching_transfer", "n_violations_transfer"]}
-        itl_runs = {k: [] for k in mle_runs}
+        per_method = {m: {k: [] for k in metric_keys} for m in methods}
         for seed in range(n_seeds):
             key = f"{coverage}:{seed}"
-            if key in checkpoint:
-                m = checkpoint[key]["mle"]; i = checkpoint[key]["itl"]
-            else:
-                N, T_mle, _ = generate_batch_dataset(
-                    mdp_std, pi_expert, coverage=coverage, K=10, delta=DELTA, seed=seed,
+            entry = checkpoint.get(key, {})
+            missing = [m for m in methods if m not in entry]
+            if missing:
+                T_outputs = _learn_all_methods(
+                    mdp_std, pi_expert, coverage, K=10, delta=DELTA,
+                    epsilon=EPSILON, seed=seed, methods=missing,
                 )
-                T_hat, _ = solve_itl(N, T_mle, mdp_std.R, mdp_std.gamma,
-                                     epsilon=EPSILON, max_iter=10, verbose=False)
-                m = _evaluate_transfer(T_mle, mdp_trn, EPSILON, start_state)
-                i = _evaluate_transfer(T_hat, mdp_trn, EPSILON, start_state)
-                checkpoint[key] = {"mle": m, "itl": i}
+                for m in missing:
+                    T_hat = T_outputs.get(f"{m}_T")
+                    if T_hat is None:
+                        entry[m] = None
+                        continue
+                    entry[m] = _evaluate_transfer(T_hat, mdp_trn, EPSILON, start_state)
+                checkpoint[key] = entry
                 _atomic_save(checkpoint, ckpt_path)
 
-            for k in mle_runs:
-                mle_runs[k].append(m[k]); itl_runs[k].append(i[k])
+            for m in methods:
+                metrics = entry.get(m)
+                if metrics is None:
+                    continue
+                for k in metric_keys:
+                    per_method[m][k].append(metrics[k])
 
         row = {"coverage": coverage}
-        for k in mle_runs:
-            mm, ms = summarize_runs(mle_runs[k])
-            im, ist = summarize_runs(itl_runs[k])
-            row[f"mle_{k}_mean"], row[f"mle_{k}_std"] = mm, ms
-            row[f"itl_{k}_mean"], row[f"itl_{k}_std"] = im, ist
+        for m in methods:
+            for k in metric_keys:
+                if per_method[m][k]:
+                    mean_, std_ = summarize_runs(per_method[m][k])
+                    row[f"{m}_{k}_mean"] = mean_
+                    row[f"{m}_{k}_std"] = std_
         rows.append(row)
-        print(f"  cov={coverage:.1f}  "
-              f"NV_t  MLE: {row['mle_normalized_value_transfer_mean']:+.3f}  "
-              f"ITL: {row['itl_normalized_value_transfer_mean']:+.3f}    "
-              f"BM_t  MLE: {row['mle_best_matching_transfer_mean']:.3f}  "
-              f"ITL: {row['itl_best_matching_transfer_mean']:.3f}")
+        line = f"  cov={coverage:.1f}  "
+        for m in methods:
+            nv = row.get(f"{m}_normalized_value_transfer_mean")
+            if nv is not None:
+                line += f"NV_t {m.upper()}: {nv:+.3f}  "
+        print(line)
 
     out_path = f"results/tables/gridworld_transfer_{sf_tag}.json"
     os.makedirs("results/tables", exist_ok=True)
@@ -153,11 +222,18 @@ def run_randomworld_transfer(stochastic_fraction, n_worlds, n_datasets):
     os.makedirs("results/checkpoints", exist_ok=True)
     checkpoint = json.load(open(ckpt_path)) if os.path.exists(ckpt_path) else {}
 
+    methods = ["mle", "itl"]
+    if os.environ.get("RUN_BASELINES", "0") == "1":
+        methods += ["ps", "mce"]
+    if os.environ.get("RUN_BITL", "0") == "1":
+        methods += ["bitl"]
+
+    metric_keys = ["normalized_value_transfer", "best_matching_transfer",
+                    "epsilon_matching_transfer", "n_violations_transfer"]
+
     rows = []
     for coverage in COVERAGES:
-        mle_runs = {k: [] for k in ["normalized_value_transfer", "best_matching_transfer",
-                                     "epsilon_matching_transfer", "n_violations_transfer"]}
-        itl_runs = {k: [] for k in mle_runs}
+        per_method = {m: {k: [] for k in metric_keys} for m in methods}
 
         for world_seed in range(n_worlds):
             mdp_std = make_randomworld(n_states=15, n_actions=5, gamma=GAMMA,
@@ -169,36 +245,46 @@ def run_randomworld_transfer(stochastic_fraction, n_worlds, n_datasets):
 
             for data_seed in range(n_datasets):
                 key = f"{coverage}:{world_seed}:{data_seed}"
-                if key in checkpoint:
-                    m = checkpoint[key]["mle"]; i = checkpoint[key]["itl"]
-                else:
+                entry = checkpoint.get(key, {})
+                missing = [m for m in methods if m not in entry]
+                if missing:
                     combined_seed = 1000 * world_seed + data_seed
-                    N, T_mle, _ = generate_batch_dataset(
-                        mdp_std, pi_expert, coverage=coverage, K=5,
-                        delta=DELTA, seed=combined_seed,
+                    T_outputs = _learn_all_methods(
+                        mdp_std, pi_expert, coverage, K=5, delta=DELTA,
+                        epsilon=EPSILON, seed=combined_seed, methods=missing,
                     )
-                    T_hat, _ = solve_itl(N, T_mle, mdp_std.R, mdp_std.gamma,
-                                          epsilon=EPSILON, max_iter=10, verbose=False)
-                    m = _evaluate_transfer(T_mle, mdp_trn, EPSILON, start_state=None)
-                    i = _evaluate_transfer(T_hat, mdp_trn, EPSILON, start_state=None)
-                    checkpoint[key] = {"mle": m, "itl": i}
+                    for m in missing:
+                        T_hat = T_outputs.get(f"{m}_T")
+                        if T_hat is None:
+                            entry[m] = None
+                            continue
+                        entry[m] = _evaluate_transfer(
+                            T_hat, mdp_trn, EPSILON, start_state=None,
+                        )
+                    checkpoint[key] = entry
                     _atomic_save(checkpoint, ckpt_path)
 
-                for k in mle_runs:
-                    mle_runs[k].append(m[k]); itl_runs[k].append(i[k])
+                for m in methods:
+                    metrics = entry.get(m)
+                    if metrics is None:
+                        continue
+                    for k in metric_keys:
+                        per_method[m][k].append(metrics[k])
 
         row = {"coverage": coverage}
-        for k in mle_runs:
-            mm, ms = summarize_runs(mle_runs[k])
-            im, ist = summarize_runs(itl_runs[k])
-            row[f"mle_{k}_mean"], row[f"mle_{k}_std"] = mm, ms
-            row[f"itl_{k}_mean"], row[f"itl_{k}_std"] = im, ist
+        for m in methods:
+            for k in metric_keys:
+                if per_method[m][k]:
+                    mean_, std_ = summarize_runs(per_method[m][k])
+                    row[f"{m}_{k}_mean"] = mean_
+                    row[f"{m}_{k}_std"] = std_
         rows.append(row)
-        print(f"  cov={coverage:.1f}  "
-              f"NV_t  MLE: {row['mle_normalized_value_transfer_mean']:+.3f}  "
-              f"ITL: {row['itl_normalized_value_transfer_mean']:+.3f}    "
-              f"BM_t  MLE: {row['mle_best_matching_transfer_mean']:.3f}  "
-              f"ITL: {row['itl_best_matching_transfer_mean']:.3f}")
+        line = f"  cov={coverage:.1f}  "
+        for m in methods:
+            nv = row.get(f"{m}_normalized_value_transfer_mean")
+            if nv is not None:
+                line += f"NV_t {m.upper()}: {nv:+.3f}  "
+        print(line)
 
     out_path = f"results/tables/randomworld_transfer_{sf_tag}.json"
     os.makedirs("results/tables", exist_ok=True)

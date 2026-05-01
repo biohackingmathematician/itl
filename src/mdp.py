@@ -10,7 +10,6 @@ Notation follows Benac et al. (2024) / Krause & Hubotter Ch10:
 """
 
 import numpy as np
-from typing import Optional
 
 
 class TabularMDP:

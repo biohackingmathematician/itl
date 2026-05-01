@@ -176,6 +176,72 @@ For Direction 3, the math sketch:
 That's a thesis chapter's worth of work, but tractable in 4 weeks if
 infrastructure starts now and BITL bugs are fixed in parallel.
 
+## Methodology gap discovered 2026-05-01: goal-domination
+
+The Combined ITL+IRL prototype hits best-action match = 1.000 on the 5×5
+gridworld (commit `2ff8540`), but a follow-up sanity check showed this is
+mostly an artifact of the benchmark, not a method success.
+
+### The check
+
+On the same gridworld, paired with `T_MLE` (no ITL, no IRL):
+- `pi*(T_MLE, R_TRUE)` matches `pi*(T*, R*)` at 0.480.
+- `pi*(T_MLE, R_trivial)` where `R_trivial = 10 * 1[s == goal]` (no step
+  cost, no soft-wall penalty) also matches at 0.480.
+
+So a degenerate goal-only reward function paired with a noisy `T_MLE`
+gives the same policy quality as the *true* reward paired with the same
+`T_MLE`. The reward structure (the −0.1 step costs, the −5 soft-wall
+penalties) doesn't matter for the optimal policy as long as the goal is
+correctly identified.
+
+### What this means for the thesis
+
+The current "match = 1.000" success criterion for ITL+IRL on gridworld
+is a *necessary but not sufficient* test for joint reward+dynamics
+recovery. To certify that the IRL step is doing useful work — and not
+just riding ITL's improvement on T plus a goal-located reward — the
+benchmark must require the reward *structure*, not just the goal
+location, to recover the optimal policy.
+
+### Proposed non-goal-dominated benchmark
+
+A 5×5 gridworld with two competing terminal cells:
+- Goal A at (0, 4): R = +5
+- Goal B at (4, 0): R = +10
+- Step cost: −0.1
+- One soft-wall barrier preventing the obvious diagonal path
+
+The optimal policy depends on the magnitude of `R_A` vs `R_B`. If a
+reward learner recovers a goal-only signal "+10 at A, +10 at B", the
+policy is ambiguous — half the seeds will converge to A, half to B.
+Only a learner that recovers the magnitude *difference* between the
+two goals will reliably match `pi*`.
+
+For ITL+IRL to claim it learns R, the falsifier becomes:
+> On the two-goal gridworld with `R(A) = 5`, `R(B) = 10`, ITL+IRL with
+> one-hot state-action features and a single anchor at goal B must
+> recover `pi*` significantly more often than:
+> (a) MLE-T + R_trivial = `10 * 1[s == goal_A or s == goal_B]`
+> (b) ITL-T + R_trivial.
+> If neither (a) nor (b) recovers `pi*` reliably and ITL+IRL does, the
+> IRL step is doing real work. If all three recover `pi*` equally, the
+> benchmark is still goal-dominated and we need a harder one.
+
+### Implementation plan
+
+1. Add a `make_two_goal_gridworld(...)` helper to `src/environments.py`.
+2. Add `experiments/run_itl_irl_two_goal.py` mirroring the existing
+   stress test.
+3. Write a unit test that asserts the trivial-R policy is *worse* than
+   the true-R policy on this benchmark — so we know the benchmark
+   actually distinguishes them before we run the full IRL comparison.
+4. Add to the thesis chapter: this is the experiment that makes the
+   joint-inference claim defensible.
+
+This is a 1-2 day add. Higher value than running more seeds on the
+existing goal-dominated gridworld.
+
 ## Quick falsifiers (next session)
 
 Before writing more code, sketch a one-paragraph falsifier per direction.

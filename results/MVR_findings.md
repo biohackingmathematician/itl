@@ -1,5 +1,30 @@
 # MVR results vs. Benac et al. (2024) Table 4
 
+> **Methodology caveats — read before citing any number from this file.**
+> Three definitions in this codebase are educated guesses that have NOT
+> been verified against the paper's methodology section (the PDF was
+> accessible during early sessions but the appendix detail wasn't read).
+> When the PDF is back in hand, verify or correct each:
+>
+> 1. **CVaR for non-Bayesian methods** (`src/utils.py::value_cvar_from_point_T`).
+>    Implemented as a Dirichlet bootstrap from `Dir(N + δ)` centered on the
+>    method's `T̂`, then CVaR over `V^{π*(T_i)}(s_0; T*)` across bootstrap
+>    samples. Most natural reading; paper may differ.
+> 2. **PS baseline definition** (`src/ps_baseline.py`). Implemented as
+>    unconstrained `Dir(N + δ)` posterior sampling (no ε-ball constraints).
+>    Posterior mean equals the Laplace-smoothed MLE — so PS-T == MLE-T as
+>    a point estimate; PS only differs in providing samples for CVaR. Most
+>    natural reading; paper may use a different definition of "PS."
+> 3. **MCE T-step** (`src/mce_baseline.py::mce_solve`). The current T-step
+>    is just `T = T_MLE` (Laplace-smoothed MLE). Herman et al. 2016 has a
+>    more elaborate T-step that constrains T using the inferred reward.
+>    The current implementation under-reports MCE's true performance and is
+>    an artificially conservative baseline.
+>
+> Until these are verified, claim "structural reproduction" not "exact
+> match" and flag the asterisks in any thesis table that uses them.
+
+
 Run date: 2026-04-13 (initial), updated 2026-04-28
 Scope: minimum viable reproduction — 5 seeds per (coverage, env) on Gridworld
 and 10 runs per coverage on RandomWorld (paper uses 50 and 100 respectively).

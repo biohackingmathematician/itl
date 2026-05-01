@@ -12,3 +12,12 @@ build/
 # MVR experiment logs
 results/logs/
 results/checkpoints/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk

@@ -80,22 +80,38 @@ def run_corridor_bitl():
 
 
 def run_gridworld_bitl():
-    """Main benchmark: Gridworld BITL with Bayesian regret."""
+    """Main benchmark: Gridworld BITL with Bayesian regret.
+
+    Configuration matches run_gridworld.py / paper Table 4 setup:
+      gamma = 0.95, epsilon = 5.0, 40% stochastic-policy-states expert.
+    Pre-fix this used gamma=0.9, epsilon=7.5, deterministic expert, which
+    diverged from both the paper and the rest of the codebase.
+    """
+    from src.expert import make_epsilon_optimal_expert, generate_batch_dataset
+
     print("\n" + "=" * 60)
-    print("  BITL on GRIDWORLD (25 states, 4 actions)")
+    print("  BITL on GRIDWORLD (25 states, 4 actions, paper Table 4 setup)")
     print("=" * 60)
 
-    mdp = make_gridworld(grid_size=5, gamma=0.9, slip_prob=0.2)
+    GAMMA = 0.95
+    EPSILON = 5.0
+    STOCHASTIC_FRACTION = 0.4
+
+    mdp = make_gridworld(grid_size=5, gamma=GAMMA, slip_prob=0.2)
     v_star, Q_star, pi_star = mdp.compute_optimal_policy()
 
-    optimal_actions = Q_star.argmax(axis=1)
-    pi_expert = deterministic_policy(mdp.n_states, mdp.n_actions, optimal_actions)
+    pi_expert = make_epsilon_optimal_expert(
+        mdp, epsilon=EPSILON, target_stochastic_fraction=STOCHASTIC_FRACTION,
+    )
 
-    N, T_mle = generate_batch_data(mdp, pi_expert, n_samples_per_sa=10, seed=42)
+    N, T_mle, _ = generate_batch_dataset(
+        mdp, pi_expert, coverage=1.0, K=10, delta=0.001, seed=42,
+    )
 
     # ITL point estimate
     print("  Computing ITL point estimate...")
-    T_itl, itl_info = solve_itl(N, T_mle, mdp.R, mdp.gamma, epsilon=7.5, max_iter=10)
+    T_itl, itl_info = solve_itl(N, T_mle, mdp.R, mdp.gamma,
+                                  epsilon=EPSILON, max_iter=10)
     mle_results = transition_mse_visited_vs_unvisited(mdp.T, T_mle, N)
     itl_results = transition_mse_visited_vs_unvisited(mdp.T, T_itl, N)
 
@@ -107,7 +123,7 @@ def run_gridworld_bitl():
     print(f"\n  Running BITL (n_samples=300, n_warmup=150)...")
     t0 = time.time()
     samples, info = bitl_sample(
-        N, T_mle, mdp.R, mdp.gamma, epsilon=7.5,
+        N, T_mle, mdp.R, mdp.gamma, epsilon=EPSILON,
         n_samples=300, n_warmup=150,
         step_size=0.005, n_leapfrog=10,
         barrier_strength=0.05,
