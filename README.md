@@ -28,13 +28,14 @@ The key insight is that an expert's near-optimal behavior constrains what the en
 - **Target**: Reproduce Table 1 RandomWorld columns
 
 ### 3. MIMIC-IV (Real Clinical Data)
-- **Input**: Sepsis patient trajectories from MIMIC-IV database
-- **States**: Discretized patient vitals (heart rate, BP, lactate, etc.)
-- **Actions**: Treatment decisions (vasopressors, IV fluids — discretized)
-- **Reward**: Clinical outcome (mortality-based)
+- **Input**: ICU hypotension patient trajectories from MIMIC-IV (Beth Israel Deaconess), following the first-review framing of Benac et al.'s Section 5.3
+- **States**: Discretized patient vitals (blood pressure, heart rate, lactate, etc.)
+- **Actions**: Vasopressor dosing decisions by clinicians (discretized)
+- **Reward**: Resolution of hypotension (clinical outcome proxy)
 - **Data**: Real clinical data, requires PhysioNet credentialed access
 - **Output**: Learned hospital transition dynamics, outlier trajectory detection, Bayesian Regret for reward transfer
 - **Target**: Reproduce Section 5.3 results
+- **Note on current scaffold**: `experiments/run_mimic.py` currently implements a Komorowski et al. (2018)-style sepsis-cohort extraction as a placeholder pipeline. The cohort filter needs to be switched to hypotension admissions before results match the first-review framing; flagged for Bianca.
 
 ### 4. BITL (Bayesian Extension)
 - **Input**: Same environments as above

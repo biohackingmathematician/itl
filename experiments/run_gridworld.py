@@ -70,7 +70,9 @@ def main():
     GAMMA = 0.95
     DELTA = 0.001
     EPSILON = 5.0                 # main ε from paper
-    STOCHASTIC_FRACTION = 0.4     # main setup (40% stochastic-policy states)
+    # 40% / 20% / 0% stochastic-policy-states are paper's Tables 4 / 5 / 6.
+    # Set STOCHASTIC_FRACTION env var to switch ablations.
+    STOCHASTIC_FRACTION = float(os.environ.get("STOCHASTIC_FRACTION", "0.4"))
     K = 10                        # paper's Gridworld K
     COVERAGES = [0.2, 0.4, 0.6, 0.8, 1.0]
     N_SEEDS = int(os.environ.get("N_SEEDS", "10"))  # MVR default 10 (paper uses 50)
@@ -95,11 +97,22 @@ def main():
     print(f"  Start state: {start_state} (bottom-left)")
 
     # --- Coverage sweep with per-seed checkpointing ---
+    # Checkpoint files are namespaced by stochastic fraction so 40%/20%/0%
+    # ablations don't clobber each other. The legacy non-namespaced file
+    # (gridworld_seeds.json) corresponds to 40% and is migrated transparently.
     os.makedirs("results/checkpoints", exist_ok=True)
-    ckpt_path = "results/checkpoints/gridworld_seeds.json"
+    sf_tag = f"sf{int(round(STOCHASTIC_FRACTION * 100)):03d}"
+    ckpt_path = f"results/checkpoints/gridworld_seeds_{sf_tag}.json"
+    legacy_path = "results/checkpoints/gridworld_seeds.json"
     if os.path.exists(ckpt_path):
         with open(ckpt_path) as f:
             checkpoint = json.load(f)
+    elif STOCHASTIC_FRACTION == 0.4 and os.path.exists(legacy_path):
+        # Adopt legacy 40% checkpoint without re-running.
+        with open(legacy_path) as f:
+            checkpoint = json.load(f)
+        with open(ckpt_path, "w") as f:
+            json.dump(checkpoint, f)
     else:
         checkpoint = {}
 
@@ -155,11 +168,11 @@ def main():
         print(f"    Violations        MLE: {row['mle_n_violations_mean']:.2f}   "
               f"ITL: {row['itl_n_violations_mean']:.2f}")
 
-    # Save
+    # Save (output table also namespaced by stochastic fraction).
     os.makedirs("results/tables", exist_ok=True)
     os.makedirs("results/figures", exist_ok=True)
 
-    out_path = "results/tables/gridworld_coverage_sweep.json"
+    out_path = f"results/tables/gridworld_coverage_sweep_{sf_tag}.json"
     with open(out_path, "w") as f:
         json.dump({
             "config": {
@@ -170,7 +183,7 @@ def main():
             "rows": rows,
         }, f, indent=2)
 
-    # Plot: Normalized Value vs Coverage
+    sf_pct = int(round(STOCHASTIC_FRACTION * 100))
     plot_coverage_sensitivity(
         coverages=[r["coverage"] for r in rows],
         itl_mean=[r["itl_normalized_value_mean"] for r in rows],
@@ -178,8 +191,8 @@ def main():
         mle_mean=[r["mle_normalized_value_mean"] for r in rows],
         mle_std=[r["mle_normalized_value_std"] for r in rows],
         metric_name="Normalized Value",
-        title=f"Gridworld — ITL vs MLE (ε={EPSILON}, 40% stochastic expert)",
-        save_path="results/figures/gridworld_normalized_value_vs_coverage.png",
+        title=f"Gridworld — ITL vs MLE (ε={EPSILON}, {sf_pct}% stochastic expert)",
+        save_path=f"results/figures/gridworld_normalized_value_vs_coverage_{sf_tag}.png",
     )
     plot_coverage_sensitivity(
         coverages=[r["coverage"] for r in rows],
@@ -188,8 +201,8 @@ def main():
         mle_mean=[r["mle_best_matching_mean"] for r in rows],
         mle_std=[r["mle_best_matching_std"] for r in rows],
         metric_name="Best matching",
-        title="Gridworld — Best matching vs Coverage",
-        save_path="results/figures/gridworld_best_matching_vs_coverage.png",
+        title=f"Gridworld — Best matching vs Coverage ({sf_pct}% stochastic)",
+        save_path=f"results/figures/gridworld_best_matching_vs_coverage_{sf_tag}.png",
     )
 
     print(f"\n  Results written to {out_path}")

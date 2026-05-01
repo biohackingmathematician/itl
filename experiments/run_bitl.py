@@ -141,10 +141,13 @@ def run_outlier_detection_demo():
     print("  BITL OUTLIER DETECTION DEMO")
     print("=" * 60)
 
-    # Use a small structured random world
-    from experiments.run_randomworld import make_structured_randomworld
+    # Use a small randomworld; "sparsity" maps to n_successors in the v2
+    # randomworld spec (Benac et al. 2024, Appendix "Randomworld Environment").
+    # The previous make_structured_randomworld helper was removed during the
+    # MVR refactor — make_randomworld with a small n_successors is its successor.
+    from src.environments import make_randomworld
 
-    mdp = make_structured_randomworld(n_states=10, n_actions=4, gamma=0.9, sparsity=3, seed=42)
+    mdp = make_randomworld(n_states=10, n_actions=4, gamma=0.9, n_successors=3, seed=42)
     _, Q_star, _ = mdp.compute_optimal_policy()
     optimal_actions = Q_star.argmax(axis=1)
     pi_expert = deterministic_policy(mdp.n_states, mdp.n_actions, optimal_actions)
@@ -158,8 +161,8 @@ def run_outlier_detection_demo():
     )
 
     # Generate outlier trajectories from a DIFFERENT MDP (corrupted dynamics)
-    mdp_corrupt = make_structured_randomworld(n_states=10, n_actions=4, gamma=0.9,
-                                               sparsity=3, seed=999)
+    mdp_corrupt = make_randomworld(n_states=10, n_actions=4, gamma=0.9,
+                                    n_successors=3, seed=999)
     outlier_trajs = generate_expert_trajectories(
         mdp_corrupt, pi_expert, n_trajectories=5, max_steps=15, seed=1
     )

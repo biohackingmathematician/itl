@@ -51,7 +51,7 @@ def bitl_sample(
     n_warmup: int = 200,
     step_size: float = 0.01,
     n_leapfrog: int = 10,
-    delta: float = 1.0,
+    delta: float = 0.001,
     barrier_strength: float = 0.1,
     T_init: Optional[np.ndarray] = None,
     seed: Optional[int] = None,
@@ -77,7 +77,23 @@ def bitl_sample(
         n_warmup: number of warmup/burn-in iterations
         step_size: HMC leapfrog step size (adapted during warmup)
         n_leapfrog: number of leapfrog steps per HMC iteration
-        delta: Dirichlet pseudo-count (concentration parameter)
+        delta: Dirichlet pseudo-count (concentration parameter). Default
+            0.001 matches the paper's Eq 5 Laplace smoothing. There is a
+            real tradeoff with this parameter — should be ablated for
+            thesis results, not silently fixed:
+            - Small delta (e.g., 0.001): weaker prior. Posterior on
+              VISITED (s,a) is close to the empirical Dir(N), giving
+              well-calibrated 95% CI. But posterior on UNVISITED (s,a)
+              is Dir(delta, ..., delta) which concentrates near simplex
+              corners (deterministic-looking transitions), inflating
+              posterior-mean MSE on those pairs.
+            - Large delta (e.g., 1.0): informative prior. Posterior on
+              unvisited (s,a) pulls toward uniform, giving better
+              posterior-mean MSE on those pairs. But CIs on visited
+              pairs are narrower than the data warrants, undercovering.
+            For point-estimate use, prefer delta=1.0. For uncertainty
+            quantification (Bayesian regret, outlier detection), prefer
+            delta=0.001.
         barrier_strength: log-barrier weight for constraint enforcement
         T_init: initial feasible transition matrix (if None, uses ITL solution)
         seed: random seed
@@ -93,16 +109,20 @@ def bitl_sample(
     n_states, n_actions, _ = N.shape
     dim = n_states * n_actions * n_states
 
-    # Compute the epsilon-ball structure
-    mdp_mle = TabularMDP(n_states, n_actions, T_mle, R, gamma)
-    _, Q_mle, _ = mdp_mle.compute_optimal_policy()
-    valid = mdp_mle.compute_epsilon_ball(Q_mle, epsilon)
+    # Constraint structure follows paper Definition 1: the eps-ball
+    # E_eps(s; T*) is exactly the set of actions the eps-optimal expert is
+    # observed taking at s. We read this off the data directly, NOT from the
+    # MLE's Q-hat. Mirrors the v2 itl_solver.py fix (see results/MVR_findings.md
+    # 2026-04-13). Pre-fix, this used `mdp_mle.compute_epsilon_ball(Q_mle, eps)`,
+    # which produced a different constraint set than the ITL solver enforces;
+    # on corridor that gave initial slack of -2.0 and silent constraint relaxation.
+    visited_sa = N.sum(axis=2) > 0          # (S, A) — observed (s, a) pairs
 
     # Linearized value for constraints
     v_lin = _compute_v_lin(T_mle, R, N, gamma, n_states, n_actions)
 
     # Build constraint MATRIX (vectorized): A_mat @ t_flat >= b_vec
-    A_mat, b_vec = _build_constraint_matrix(R, gamma, v_lin, valid, epsilon, n_states, n_actions)
+    A_mat, b_vec = _build_constraint_matrix(R, gamma, v_lin, visited_sa, epsilon, n_states, n_actions)
     n_constraints = A_mat.shape[0]
 
     if verbose:
@@ -408,14 +428,18 @@ def _constraint_normal_phi(A_row, T, n_states, n_actions):
 # CONSTRAINT CONSTRUCTION (VECTORIZED)
 # =============================================================================
 
-def _build_constraint_matrix(R, gamma, v_lin, valid, epsilon, n_states, n_actions):
+def _build_constraint_matrix(R, gamma, v_lin, visited_sa, epsilon, n_states, n_actions):
     """
     Build constraint matrix A and vector b such that A @ t_flat >= b.
 
-    Eq 8 (valid a vs invalid a'):
+    Per paper Definition 1 + Eq 10's "for all (s,a) ∈ D" scope, constraints
+    are added only at observed states, with the eps-ball at s defined as the
+    set of observed expert actions there.
+
+    Eq 8 (observed a vs unobserved a'):
         gamma * v^T (T[s,a,:] - T[s,a',:]) >= epsilon - (R[s,a] - R[s,a'])
 
-    Eq 9 (valid a vs valid a', both directions):
+    Eq 9 (observed a vs observed a', both directions):
         gamma * v^T (T[s,a,:] - T[s,a',:]) >= -epsilon - (R[s,a] - R[s,a'])
         gamma * v^T (T[s,a',:] - T[s,a,:]) >= -epsilon - (R[s,a'] - R[s,a])
 
@@ -427,9 +451,15 @@ def _build_constraint_matrix(R, gamma, v_lin, valid, epsilon, n_states, n_action
     rows_A = []
     rows_b = []
 
+    visited_s = visited_sa.any(axis=1)
+
     for s in range(n_states):
-        valid_actions = np.where(valid[s])[0]
-        invalid_actions = np.where(~valid[s])[0]
+        # Per Eq 10 scope: skip states not in the observed dataset D.
+        if not visited_s[s]:
+            continue
+
+        valid_actions = np.where(visited_sa[s])[0]      # observed at s
+        invalid_actions = np.where(~visited_sa[s])[0]   # unobserved at s
 
         for a_v in valid_actions:
             # Eq 8: valid vs invalid
@@ -665,6 +695,20 @@ def posterior_mse(samples: np.ndarray, T_true: np.ndarray) -> dict:
     """
     MSE of posterior mean vs truth, and 95% CI coverage.
 
+    Coverage caveat: any Dirichlet-based posterior with delta > 0 has support
+    that strictly excludes T = 0. So for MDPs with deterministic transitions
+    (T_true entries that are exactly 0), those entries can never be in any
+    posterior CI. We therefore report THREE coverage statistics:
+
+      coverage_95           : over all entries (theoretical ceiling = fraction
+                              of T_true entries that are non-zero)
+      coverage_95_nonzero   : restricted to entries with T_true > 0 (the
+                              only meaningful diagnostic for sparse MDPs)
+      coverage_95_visited   : restricted to (s, a) pairs that were observed
+                              (visited_sa True). The unvisited pairs follow
+                              the Dirichlet prior and their coverage is
+                              just the prior's calibration, not the data's.
+
     Args:
         samples: shape (K, n_states, n_actions, n_states)
         T_true: shape (n_states, n_actions, n_states)
@@ -673,10 +717,16 @@ def posterior_mse(samples: np.ndarray, T_true: np.ndarray) -> dict:
     T_mean = summary["mean"]
     mse = np.mean(np.sum((T_true - T_mean) ** 2, axis=2))
     in_ci = (T_true >= summary["ci_lower"]) & (T_true <= summary["ci_upper"])
-    coverage = np.mean(in_ci)
+    coverage = float(np.mean(in_ci))
+
+    nonzero_mask = T_true > 0
+    coverage_nonzero = (
+        float(in_ci[nonzero_mask].mean()) if nonzero_mask.any() else float("nan")
+    )
 
     return {
         "mse_posterior_mean": mse,
         "coverage_95": coverage,
+        "coverage_95_nonzero": coverage_nonzero,
         "T_posterior_mean": T_mean,
     }

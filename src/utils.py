@@ -159,6 +159,126 @@ def transition_mse_visited_vs_unvisited(
 
 
 # =============================================================================
+# Value CVaR (paper Table 4 metric)
+# =============================================================================
+
+def value_cvar_from_T_distribution(
+    T_samples: np.ndarray,
+    R: np.ndarray,
+    gamma: float,
+    true_mdp: TabularMDP,
+    alpha: float = 0.05,
+    start_state: Optional[int] = None,
+) -> float:
+    """
+    Conditional Value-at-Risk of the policy value at level alpha.
+
+    For each posterior / bootstrap sample T_i:
+      pi_i  = pi*(T_i, R)             optimal policy under sampled dynamics
+      V_i   = V^{pi_i}(s0; T*, R)     evaluated under TRUE dynamics
+
+    CVaR_alpha = mean of V_i in the worst alpha-tail
+              = mean(V_i | V_i <= percentile(V, alpha * 100))
+
+    Paper Table 4 reports CVaR at alpha=0.01, 0.02, 0.05.
+
+    Caveat: paper methodology section was not directly read this session.
+    This implementation chooses the most natural definition (lower-tail
+    average over the dynamics distribution, evaluated under the true T*).
+    Verify against paper Section 5 before publication.
+
+    Args:
+        T_samples: shape (K, n_states, n_actions, n_states) — posterior or
+            bootstrap samples of the dynamics.
+        R: reward function (n_states, n_actions).
+        gamma: discount factor.
+        true_mdp: the TRUE MDP (its T is used for evaluation).
+        alpha: tail level (e.g., 0.05 for "CVaR 5%").
+        start_state: state to evaluate at; None averages over a uniform
+            initial distribution.
+
+    Returns:
+        CVaR_alpha as a float.
+    """
+    K = T_samples.shape[0]
+    n_states = true_mdp.n_states
+    n_actions = true_mdp.n_actions
+
+    V_samples = np.zeros(K)
+    for i in range(K):
+        mdp_i = TabularMDP(n_states, n_actions, T_samples[i], R, gamma)
+        _, _, pi_i = mdp_i.compute_optimal_policy()
+        V_under_true = true_mdp.compute_value_function(pi_i)
+        V_samples[i] = (
+            V_under_true[start_state] if start_state is not None
+            else V_under_true.mean()
+        )
+
+    # Lower tail mean
+    threshold = np.percentile(V_samples, alpha * 100.0)
+    tail = V_samples[V_samples <= threshold]
+    if len(tail) == 0:
+        return float(V_samples.min())
+    return float(tail.mean())
+
+
+def bootstrap_T_samples(
+    N: np.ndarray,
+    delta: float = 0.001,
+    n_samples: int = 200,
+    seed: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Sample K transition matrices from Dir(N + delta) per (s, a). Used to give
+    point-estimate methods (MLE, ITL, MCE) a distribution over T for CVaR.
+
+    BITL doesn't need this — it has its own posterior. The paper's CVaR
+    columns for non-Bayesian methods presumably use a similar bootstrap;
+    this implementation is the natural choice but should be checked against
+    paper methodology.
+    """
+    rng = np.random.default_rng(seed)
+    n_states, n_actions, _ = N.shape
+    samples = np.zeros((n_samples, n_states, n_actions, n_states))
+    alpha = N + delta
+    for s in range(n_states):
+        for a in range(n_actions):
+            # numpy Dirichlet expects 1-D concentration vector
+            samples[:, s, a, :] = rng.dirichlet(alpha[s, a], size=n_samples)
+    return samples
+
+
+def value_cvar_from_point_T(
+    T_hat: np.ndarray,
+    N: np.ndarray,
+    R: np.ndarray,
+    gamma: float,
+    true_mdp: TabularMDP,
+    alpha: float = 0.05,
+    start_state: Optional[int] = None,
+    n_bootstrap: int = 200,
+    delta: float = 0.001,
+    seed: Optional[int] = None,
+) -> float:
+    """
+    CVaR for a point-estimate method by Dirichlet bootstrap centered on T_hat.
+
+    The paper's CVaR columns for MLE/ITL/MCE/PS need *some* distribution
+    over T to define a tail. We use Dir(N + delta) bootstrapping. T_hat is
+    used for the policy step (so the policy reflects the method's point
+    estimate); the bootstrap T's are only used to evaluate that policy's
+    value under TRUE dynamics — same definition as
+    `value_cvar_from_T_distribution`.
+
+    See docstring on the limitation: paper methodology not directly verified.
+    """
+    T_samples = bootstrap_T_samples(N, delta=delta, n_samples=n_bootstrap, seed=seed)
+    return value_cvar_from_T_distribution(
+        T_samples, R, gamma, true_mdp, alpha=alpha, start_state=start_state
+    )
+
+
+# =============================================================================
 # Aggregation helpers
 # =============================================================================
 

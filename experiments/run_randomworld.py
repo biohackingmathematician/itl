@@ -60,17 +60,24 @@ def main():
     GAMMA = 0.95
     DELTA = 0.001
     EPSILON = 5.0
-    STOCHASTIC_FRACTION = 0.4
+    STOCHASTIC_FRACTION = float(os.environ.get("STOCHASTIC_FRACTION", "0.4"))
     K = 5                          # paper's RandomWorld K
     COVERAGES = [0.2, 0.4, 0.6, 0.8, 1.0]
-    N_WORLDS = 5                   # MVR: 5 worlds (paper: 20)
-    N_DATASETS_PER_WORLD = 2       # MVR: 2 datasets/world (paper: 5)
+    N_WORLDS = int(os.environ.get("N_WORLDS", "5"))                # paper: 20
+    N_DATASETS_PER_WORLD = int(os.environ.get("N_DATASETS", "2"))  # paper: 5
 
     os.makedirs("results/checkpoints", exist_ok=True)
-    ckpt_path = "results/checkpoints/randomworld_runs.json"
+    sf_tag = f"sf{int(round(STOCHASTIC_FRACTION * 100)):03d}"
+    ckpt_path = f"results/checkpoints/randomworld_runs_{sf_tag}.json"
+    legacy_path = "results/checkpoints/randomworld_runs.json"
     if os.path.exists(ckpt_path):
         with open(ckpt_path) as f:
             checkpoint = json.load(f)
+    elif STOCHASTIC_FRACTION == 0.4 and os.path.exists(legacy_path):
+        with open(legacy_path) as f:
+            checkpoint = json.load(f)
+        with open(ckpt_path, "w") as f:
+            json.dump(checkpoint, f)
     else:
         checkpoint = {}
 
@@ -142,7 +149,7 @@ def main():
     os.makedirs("results/tables", exist_ok=True)
     os.makedirs("results/figures", exist_ok=True)
 
-    out_path = "results/tables/randomworld_coverage_sweep.json"
+    out_path = f"results/tables/randomworld_coverage_sweep_{sf_tag}.json"
     with open(out_path, "w") as f:
         json.dump({
             "config": {
@@ -154,6 +161,7 @@ def main():
             "rows": rows,
         }, f, indent=2)
 
+    sf_pct = int(round(STOCHASTIC_FRACTION * 100))
     plot_coverage_sensitivity(
         coverages=[r["coverage"] for r in rows],
         itl_mean=[r["itl_normalized_value_mean"] for r in rows],
@@ -161,8 +169,8 @@ def main():
         mle_mean=[r["mle_normalized_value_mean"] for r in rows],
         mle_std=[r["mle_normalized_value_std"] for r in rows],
         metric_name="Normalized Value",
-        title=f"RandomWorld — ITL vs MLE (ε={EPSILON}, 40% stochastic expert)",
-        save_path="results/figures/randomworld_normalized_value_vs_coverage.png",
+        title=f"RandomWorld — ITL vs MLE (ε={EPSILON}, {sf_pct}% stochastic expert)",
+        save_path=f"results/figures/randomworld_normalized_value_vs_coverage_{sf_tag}.png",
     )
     plot_coverage_sensitivity(
         coverages=[r["coverage"] for r in rows],
@@ -171,8 +179,8 @@ def main():
         mle_mean=[r["mle_best_matching_mean"] for r in rows],
         mle_std=[r["mle_best_matching_std"] for r in rows],
         metric_name="Best matching",
-        title="RandomWorld — Best matching vs Coverage",
-        save_path="results/figures/randomworld_best_matching_vs_coverage.png",
+        title=f"RandomWorld — Best matching vs Coverage ({sf_pct}% stochastic)",
+        save_path=f"results/figures/randomworld_best_matching_vs_coverage_{sf_tag}.png",
     )
 
     print(f"\n  Results written to {out_path}")
