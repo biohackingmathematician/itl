@@ -318,6 +318,70 @@ minutes.
 
 Output table at `results/tables/randomworld_coverage_sweep_sf020.json`.
 
+## 2026-05-02: Transfer task 20% stochastic, both envs (paper Table 5 transfer)
+
+Configuration: gridworld at 50 seeds, randomworld at 20 worlds × 5
+dataset seeds (= 100 runs/coverage), all five methods, run via
+`STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 ENV=both
+N_SEEDS=50 N_WORLDS=20 N_DATASETS=5 python -m experiments.run_transfer`.
+Wall-clock ~55 minutes.
+
+### Headline transfer NV at coverage = 1.0
+
+| Method | Gridworld NV_t | RandomWorld NV_t |
+|--------|----------------|------------------|
+| **ITL**  | **0.982**      | **0.858**        |
+| **BITL** | **0.988**      | 0.852            |
+| MLE      | 0.081          | 0.833            |
+| PS       | 0.081          | 0.833            |
+| MCE      | 0.081          | 0.833            |
+
+### Coverage sweep (NV_t)
+
+Gridworld:
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.083 | 0.079 | -0.007 | 0.083 | 0.083 |
+| 0.4 | 0.167 | 0.258 | 0.087 | 0.167 | 0.167 |
+| 0.6 | 0.181 | 0.500 | 0.290 | 0.181 | 0.181 |
+| 0.8 | 0.181 | 0.810 | 0.609 | 0.181 | 0.181 |
+| 1.0 | 0.081 | 0.982 | 0.988 | 0.081 | 0.081 |
+
+RandomWorld:
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.787 | 0.792 | 0.786 | 0.787 | 0.787 |
+| 0.4 | 0.794 | 0.806 | 0.796 | 0.794 | 0.794 |
+| 0.6 | 0.807 | 0.821 | 0.821 | 0.807 | 0.807 |
+| 0.8 | 0.821 | 0.834 | 0.831 | 0.821 | 0.821 |
+| 1.0 | 0.833 | 0.858 | 0.852 | 0.833 | 0.833 |
+
+### What this tells us
+
+- **Gridworld transfer at 20% looks essentially identical to 40%**:
+  ITL=0.982 / MLE=0.081 / BITL=0.988 at coverage = 1.0. The MLE
+  collapse story holds; ITL recovers the transfer-task optimal policy.
+- **RandomWorld transfer at 20% slightly better than 40%** for ITL
+  (0.858 vs 0.879 at 40% — wait, actually 0.858 < 0.879, so 20% is
+  marginally *worse* on RandomWorld transfer NV). The 0.025 gap over
+  MLE is preserved across both stochastic fractions — diffuse
+  RandomWorld dynamics still don't punish wrong T enough to make
+  transfer NV collapse for MLE.
+- **BITL closes to ITL on both envs** at full coverage (gridworld
+  0.988 vs 0.982 — BITL marginally beats; randomworld 0.852 vs 0.858
+  — BITL marginally trails).
+- Same caveat as 40%: the spec threshold "ITL transfer NV @ cov=1.0
+  > 0.95 on randomworld" is not met (0.858), for the same reason as
+  the 40% sweep: diffuse `make_randomworld` dynamics with U[0,1]
+  Dirichlet probabilities don't produce a sharp MLE collapse on
+  transfer.
+
+Output tables at:
+- `results/tables/gridworld_transfer_sf020.json`
+- `results/tables/randomworld_transfer_sf020.json`
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
