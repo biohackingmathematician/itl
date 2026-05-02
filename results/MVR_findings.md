@@ -433,6 +433,51 @@ Wall-clock ~36 minutes.
 
 Output table at `results/tables/gridworld_coverage_sweep_sf000.json`.
 
+## 2026-05-02: RandomWorld 0% stochastic, 100 runs/coverage (paper Table 6 right half)
+
+Configuration matches paper Table 6 (RandomWorld panel) exactly: 15
+states × 5 actions × 5 successors per (s, a), **0% stochastic-policy
+states (deterministic expert)**, all other constants identical. 20
+worlds × 5 dataset seeds. Run via `STOCHASTIC_FRACTION=0.0
+RUN_BASELINES=1 RUN_BITL=1 N_WORLDS=20 N_DATASETS=5 python -m
+experiments.run_randomworld`. Wall-clock ~18 minutes.
+
+### Headline at coverage = 1.0
+
+| Method  | Normalized Value | Best matching | ε-matching | # Violations |
+|---------|------------------|---------------|------------|--------------|
+| **ITL** | **1.000 ± 0.000** | **1.000 ± 0.000** | **1.000**  | **0.00** |
+| **BITL**| **1.000 ± 0.000** | **0.999 ± 0.007** | **1.000**  | **0.00** |
+| MLE     | 0.968 ± 0.032    | 0.841 ± 0.092 | 0.991      | 0.13     |
+| PS      | 0.968 ± 0.032    | 0.841 ± 0.092 | 0.991      | 0.13     |
+| MCE     | 0.968 ± 0.032    | 0.841 ± 0.092 | 0.991      | 0.13     |
+
+### Coverage sweep (Normalized Value)
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.796 | 0.802 | 0.812 | 0.796 | 0.796 |
+| 0.4 | 0.845 | 0.856 | 0.854 | 0.845 | 0.845 |
+| 0.6 | 0.888 | 0.905 | 0.910 | 0.888 | 0.888 |
+| 0.8 | 0.926 | 0.951 | 0.953 | 0.926 | 0.926 |
+| 1.0 | 0.968 | 1.000 | 1.000 | 0.968 | 0.968 |
+
+### What 0% gives us on RandomWorld
+
+- **Same exact-recovery story as gridworld**: ITL hits NV=1.000±0.000
+  / BM=1.000±0.000 / ε-match=1.000 / 0 violations on every one of the
+  100 runs.
+- **MLE BM = 0.841 at coverage = 1.0** is the highest MLE BM number
+  across all six panels (40/20/0 × gridworld/randomworld). With a
+  fully deterministic expert and full coverage, MLE concentrates on
+  the optimal action for every state, and randomworld's diffuse
+  transitions mean the value of "almost optimal" is very close to
+  optimal.
+- **BITL essentially indistinguishable from ITL** at coverage = 1.0
+  (0.999 vs 1.000 BM is a single outlier seed away from exact match).
+
+Output table at `results/tables/randomworld_coverage_sweep_sf000.json`.
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
