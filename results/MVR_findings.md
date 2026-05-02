@@ -270,6 +270,54 @@ experiments.run_gridworld`. Wall-clock ~40 minutes.
 
 Output table at `results/tables/gridworld_coverage_sweep_sf020.json`.
 
+## 2026-05-02: RandomWorld 20% stochastic, 100 runs/coverage (paper Table 5 right half)
+
+Configuration matches paper Table 5 (RandomWorld panel) exactly: 15
+states × 5 actions × 5 successors per (s, a), γ = 0.95, ε = 5.0,
+**20% stochastic-policy-state expert**, δ = 0.001, K = 5, 20 worlds × 5
+dataset seeds = 100 runs/coverage. All five methods via
+`STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 N_WORLDS=20
+N_DATASETS=5 python -m experiments.run_randomworld`. Wall-clock ~26
+minutes.
+
+### Headline at coverage = 1.0
+
+| Method  | Normalized Value | Best matching | ε-matching | # Violations |
+|---------|------------------|---------------|------------|--------------|
+| **ITL** | **0.991 ± 0.011** | **0.871 ± 0.060** | **1.000**  | **0.00** |
+| **BITL**| **0.991 ± 0.010** | **0.865 ± 0.054** | **1.000**  | **0.00** |
+| MLE     | 0.965 ± 0.033    | 0.755 ± 0.101 | 0.994      | 0.09     |
+| PS      | 0.965 ± 0.033    | 0.755 ± 0.101 | 0.994      | 0.09     |
+| MCE     | 0.965 ± 0.033    | 0.755 ± 0.101 | 0.994      | 0.09     |
+
+### Coverage sweep (Normalized Value)
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.797 | 0.801 | 0.811 | 0.797 | 0.797 |
+| 0.4 | 0.843 | 0.853 | 0.856 | 0.843 | 0.843 |
+| 0.6 | 0.888 | 0.901 | 0.899 | 0.888 | 0.888 |
+| 0.8 | 0.925 | 0.946 | 0.946 | 0.925 | 0.925 |
+| 1.0 | 0.965 | 0.991 | 0.991 | 0.965 | 0.965 |
+
+### What changes at 20% vs 40% on RandomWorld
+
+- **ITL gap over MLE widens slightly** at every coverage. At 40%
+  coverage=1.0: ITL=0.980 vs MLE=0.964 (gap 0.016). At 20%: ITL=0.991
+  vs MLE=0.965 (gap 0.026). A more deterministic expert means more
+  Q-gap-based information per (s,a) sample.
+- **ε-matching is monotonic for every method** (0.885 → 0.911 → 0.947
+  → 0.960 → 0.994 for MLE; ITL hits 1.000 at coverage = 1.0 again).
+  No U-shape on RandomWorld because the diffuse transitions don't
+  produce the bias/variance crossover gridworld has.
+- **BITL ≈ ITL across the sweep**, both clearly above the baselines,
+  with BITL competitive even at the lowest coverage (0.811 vs ITL's
+  0.801 at coverage = 0.2).
+- **ITL violations = 0.00 at coverage = 1.0**; MLE has 0.09. Same
+  sharp drop as the 40% sweep.
+
+Output table at `results/tables/randomworld_coverage_sweep_sf020.json`.
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
