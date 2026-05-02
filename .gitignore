@@ -21,3 +21,8 @@ results/checkpoints/
 *.synctex.gz
 *.fls
 *.fdb_latexmk
+
+# R / RStudio artifacts (auto-created by some editor extensions)
+.Rhistory
+.RData
+.Ruserdata

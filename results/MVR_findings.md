@@ -25,9 +25,94 @@
 > match" and flag the asterisks in any thesis table that uses them.
 
 
-Run date: 2026-04-13 (initial), updated 2026-04-28
-Scope: minimum viable reproduction — 5 seeds per (coverage, env) on Gridworld
-and 10 runs per coverage on RandomWorld (paper uses 50 and 100 respectively).
+Run date: 2026-04-13 (initial), updated 2026-04-28, **2026-05-01 (full
+50-seed Gridworld reproduction — see Section "2026-05-01 update")**
+Scope: as of 2026-05-01, Gridworld at paper-grade 50 seeds × 5 coverages
+× 5 methods (250 pairs total). RandomWorld and transfer-task ablations
+still at MVR-grade.
+
+## 2026-05-01 update: full 50-seed Gridworld reproduction
+
+Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
+slip 0.2, γ = 0.95, ε = 5.0, 40% stochastic-policy-state expert,
+δ = 0.001, K = 10, 50 seeds. All five methods (MLE, ITL, BITL, MCE, PS)
+computed in a single sweep via `RUN_BASELINES=1 RUN_BITL=1 N_SEEDS=50
+python -m experiments.run_gridworld`.
+
+### Headline at coverage = 1.0 (paper's strongest claim)
+
+| Method  | Normalized Value | Best matching | ε-matching | Total Variation | # Violations |
+|---------|------------------|---------------|------------|-----------------|--------------|
+| **ITL** | **0.998 ± 0.004** | **0.870 ± 0.070** | **1.000 ± 0.000** | 53.7 | **0.00** |
+| **BITL**| **0.994 ± 0.009** | **0.841 ± 0.061** | **1.000 ± 0.000** | 56.6 | **0.00** |
+| MLE     | 0.141 ± 0.004    | 0.534 ± 0.048 | 0.710 ± 0.017 | 57.0 | 7.24 |
+| PS      | 0.141 ± 0.004    | 0.534 ± 0.048 | 0.710 ± 0.017 | 57.0 | 7.24 |
+| MCE     | 0.141 ± 0.004    | 0.534 ± 0.048 | 0.710 ± 0.017 | 57.0 | 7.24 |
+
+### Coverage sweep (Best matching, 50-seed mean ± std)
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.532 ± 0.062 | 0.582 ± 0.041 | 0.346 ± 0.088 | 0.532 ± 0.062 | 0.532 ± 0.062 |
+| 0.4 | 0.509 ± 0.120 | 0.658 ± 0.067 | 0.444 ± 0.081 | 0.509 ± 0.120 | 0.509 ± 0.120 |
+| 0.6 | 0.430 ± 0.135 | 0.709 ± 0.078 | 0.569 ± 0.099 | 0.430 ± 0.135 | 0.430 ± 0.135 |
+| 0.8 | 0.465 ± 0.115 | 0.758 ± 0.072 | 0.688 ± 0.081 | 0.465 ± 0.115 | 0.465 ± 0.115 |
+| 1.0 | 0.534 ± 0.048 | 0.870 ± 0.070 | 0.841 ± 0.061 | 0.534 ± 0.048 | 0.534 ± 0.048 |
+
+### What matches the paper structurally
+- **ITL ≈ BITL >> baselines on every metric at full coverage.** Paper's
+  central claim, reproduced.
+- **ε-matching = exactly 1.000 for ITL and BITL at coverage = 1.0.** This
+  is exactly what Theorem 1 predicts.
+- **0 constraint violations for ITL and BITL at full coverage; MLE has 7+.**
+  Matches the paper's qualitative statement "ITL and BITL do not violate
+  any constraints."
+- **MLE Normalized Value collapses to ~0.14 at full coverage.** Paper's
+  Figure 2 story (MLE picks plausible-but-wrong greedy actions that walk
+  into soft walls).
+
+### Three quirks to know about
+
+1. **PS = MLE on every metric.** Expected, not a bug: PS's posterior
+   mean is exactly the Laplace-smoothed MLE
+   (`Dir(N + δ)` posterior mean = `(N + δ) / sum`). Same T → same
+   policy → same metrics. PS only differs in providing posterior samples
+   for the Value CVaR column.
+
+2. **MCE = MLE on every metric.** Documented limitation: our MCE's
+   T-step is the simple Laplace MLE. Herman et al. 2016 has a more
+   elaborate T-step that constrains T using the inferred reward, which
+   we have not implemented. On a goal-dominated gridworld the recovered
+   R doesn't change the policy, so MCE collapses to MLE. Paper reports
+   MCE BM = 0.55 ± 0.11 (close to ITL); ours MCE = 0.534 (= MLE) until
+   the joint T-step lands. Half a day of work.
+
+3. **BITL is *worse* than MLE at low coverage** (NV 0.011 at cov=0.2 vs
+   MLE's 0.064). At low coverage 80% of (s, a) pairs are unvisited, and
+   `Dir(0.001)` puts samples near the simplex corners — wild noise
+   inflates the posterior-mean MSE on those pairs. This is the
+   `delta=0.001` tradeoff documented in the BITL docstring. At coverage
+   ≥ 0.6 BITL recovers and is competitive with ITL. Worth a thesis
+   ablation: re-run with `delta=1.0` and report both columns.
+
+### Absolute-number divergence from paper persists
+
+Paper Table 4 (40% stochastic, standard task):
+- ITL Best matching: 0.56 ± 0.11 (ours: 0.870 at cov=1.0)
+- MLE Best matching: 0.31 ± 0.06 (ours: 0.534 at cov=1.0)
+
+Both our ITL and our MLE numbers run roughly 1.5× higher than the
+paper's. The most likely cause is environmental: the paper's exact
+soft-wall layout is not published, so our 5-tile layout is a guess and
+likely less aversive than the paper's. Averaging across our coverages
+(0.2 → 1.0) brings the numbers closer to the paper's, suggesting paper
+Table 4 may also be a coverage-aggregate.
+
+The defensible claim is "structural reproduction of Table 4 (ITL >> MLE
+on every metric, ε-matching → 1.0 at full coverage)." The indefensible
+claim is "exact reproduction of paper absolute numbers."
+
+
 
 ## 2026-04-28 update: transfer task added
 
