@@ -219,6 +219,57 @@ Output tables at:
 - `results/tables/gridworld_transfer_sf040.json`
 - `results/tables/randomworld_transfer_sf040.json`
 
+## 2026-05-02: Gridworld 20% stochastic, 50 seeds (paper Table 5 left half)
+
+Configuration matches paper Table 5 (Gridworld panel) exactly: 5×5
+gridworld, soft walls, slip 0.2, γ=0.95, ε=5.0, **20% stochastic-policy
+states (5 of 25)**, δ=0.001, K=10, 50 seeds. All five methods via
+`STOCHASTIC_FRACTION=0.2 RUN_BASELINES=1 RUN_BITL=1 N_SEEDS=50 python -m
+experiments.run_gridworld`. Wall-clock ~40 minutes.
+
+### Headline at coverage = 1.0
+
+| Method  | Normalized Value | Best matching | ε-matching | # Violations |
+|---------|------------------|---------------|------------|--------------|
+| **ITL** | **0.999 ± 0.001** | **0.921 ± 0.038** | **1.000**  | **0.00** |
+| **BITL**| **0.999 ± 0.001** | **0.895 ± 0.038** | **1.000**  | **0.00** |
+| MLE     | 0.148 ± 0.016    | 0.553 ± 0.036 | 0.750      | 6.24     |
+| PS      | 0.148 ± 0.016    | 0.553 ± 0.036 | 0.750      | 6.24     |
+| MCE     | 0.148 ± 0.016    | 0.553 ± 0.036 | 0.750      | 6.24     |
+
+### Coverage sweep (Normalized Value)
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.066 | 0.092 | 0.022 | 0.066 | 0.066 |
+| 0.4 | 0.173 | 0.311 | 0.212 | 0.173 | 0.173 |
+| 0.6 | 0.236 | 0.540 | 0.381 | 0.236 | 0.236 |
+| 0.8 | 0.221 | 0.871 | 0.638 | 0.221 | 0.221 |
+| 1.0 | 0.148 | 0.999 | 0.999 | 0.148 | 0.148 |
+
+### What this tells us about the 40% → 20% ablation
+
+- **ITL gains absolute power as the expert becomes more deterministic.**
+  At 40% stochastic ITL hit NV=0.998 / BM=0.870 at coverage=1.0; at
+  20% it hits NV=0.999 / BM=0.921. The expert's tighter ε-ball
+  produces tighter Q-gap constraints, which is what ITL exploits.
+- **MLE pattern is unchanged.** MLE at 20%-stochastic looks essentially
+  identical to MLE at 40%-stochastic on every metric. Expected: MLE
+  doesn't use the policy structure.
+- **BITL closes the gap to ITL.** At 40%, BITL trailed ITL on BM
+  (0.841 vs 0.870); at 20% it's much closer (0.895 vs 0.921). With
+  more deterministic experts, the constraint set is sharper, so the
+  HMC posterior concentrates faster.
+- **MLE ε-matching is U-shaped in coverage** (0.823 → 0.779 → 0.703
+  → 0.716 → 0.750) — same shape we already see in the 40% sweep.
+  This isn't a bug: at intermediate coverage the K=10 noisy MLE
+  estimate is *worse* than the Laplace-uniform default for unvisited
+  pairs, so flipping argmax decisions get worse before they get
+  better. ITL's ε-match is monotonic by construction (the QP enforces
+  it).
+
+Output table at `results/tables/gridworld_coverage_sweep_sf020.json`.
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
