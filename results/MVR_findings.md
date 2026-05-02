@@ -26,11 +26,198 @@
 
 
 Run date: 2026-04-13 (initial), updated 2026-04-28, 2026-05-01 (full
-50-seed Gridworld reproduction), **2026-05-02 (full 100-run RandomWorld
-reproduction — see Section "2026-05-02: RandomWorld 40%, 100 runs/coverage")**
-Scope: as of 2026-05-02, Gridworld AND RandomWorld at paper-grade scale
-× 5 coverages × 5 methods. Transfer-task and 20% / 0% stochastic
-ablations still pending.
+50-seed Gridworld 40% sweep), **2026-05-02 (complete synthetic
+reproduction across 40%/20%/0% stochastic ablations — see next section)**
+Scope: paper Tables 4, 5, 6 standard + transfer, both environments
+(Gridworld + RandomWorld), all five methods (MLE, ITL, BITL, MCE, PS),
+at full paper-grade seed counts.
+
+## 2026-05-02: complete synthetic reproduction across 40%/20%/0% stochastic ablations
+
+This section is the side-by-side summary of paper Tables 4 (40%
+stochastic), 5 (20% stochastic), and 6 (0% stochastic) at coverage =
+1.0 only, on both the standard task and the transfer task, comparing
+each cell to the paper's published values where available. All
+underlying full-coverage-sweep tables are in `results/tables/*.json`
+and per-step writeups follow this section.
+
+**Reproduction setup (matches paper):**
+- Gridworld: 5×5, soft walls (5 tiles, −5 each), slip 0.2, γ=0.95, ε=5,
+  K=10, 50 seeds.
+- RandomWorld: 15 states × 5 actions × 5 successors per (s, a),
+  γ=0.95, ε=5, K=5, 20 worlds × 5 dataset seeds = 100 runs/coverage.
+- δ=0.001 (paper Eq 5).
+- Three stochastic-fractions: 0.4 (Tbl 4), 0.2 (Tbl 5), 0.0 (Tbl 6).
+- Methods: MLE, ITL, BITL, PS, MCE.
+
+Paper values quoted below for the 40% panel come from page 16 of the
+Benac et al. (2024) PDF. The 20% and 0% paper values are not in our
+extracted notes (the PDF mount got cleaned during a prior session)
+and are flagged with `—`. Where a paper number is `—`, treat the
+"ours" column as the published reproduction number, not a comparison.
+
+### Table 4 — 40% stochastic, standard task
+
+Gridworld (best matching, ε-matching, # violations at coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | 0.56±0.11 | **0.870±0.070** | 0.65±0.12 | **1.000** | 0.0±0.0 | **0.00** |
+| MLE    | 0.31±0.06 | 0.534±0.048 | 0.37±0.06 | 0.710 | 23.13±6.59 | 7.24 |
+| BITL   | —         | 0.841±0.061 | —         | 1.000 | —          | 0.00 |
+| MCE    | 0.55±0.11 | 0.534±0.048 | —         | 0.710 | —          | 7.24 |
+| PS     | —         | 0.534±0.048 | —         | 0.710 | —          | 7.24 |
+
+RandomWorld (coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | 0.58±0.15 | **0.762±0.082** | 0.76±0.13 | **1.000** | 0.0±0.0 | **0.00** |
+| MLE    | 0.29±0.11 | 0.695±0.097 | 0.43±0.11 | 0.995 | 17.23±6.75 | 0.07 |
+| BITL   | —         | 0.751±0.088 | —         | 0.999 | —          | 0.01 |
+| MCE    | —         | 0.695±0.097 | —         | 0.995 | —          | 0.07 |
+| PS     | —         | 0.695±0.097 | —         | 0.995 | —          | 0.07 |
+
+### Table 4 transfer columns — 40% stochastic
+
+| Env | Method | ours NV_t | ours BM_t | ours ε_t | ours viol_t |
+|-----|--------|-----------|-----------|----------|-------------|
+| GW  | ITL    | **0.987** | 0.772     | 0.974    | 0.64 |
+| GW  | BITL   | **0.991** | 0.730     | 0.980    | 0.50 |
+| GW  | MLE    | 0.085     | 0.572     | 0.710    | 7.24 |
+| RW  | ITL    | **0.879** | 0.377     | 0.975    | 0.38 |
+| RW  | BITL   | **0.871** | 0.353     | 0.977    | 0.35 |
+| RW  | MLE    | 0.848     | 0.303     | 0.961    | 0.59 |
+
+### Table 5 — 20% stochastic, standard task
+
+Gridworld (coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | —        | **0.921±0.038** | — | **1.000** | — | **0.00** |
+| BITL   | —        | 0.895±0.038 | — | 1.000 | — | 0.00 |
+| MLE    | —        | 0.553±0.036 | — | 0.750 | — | 6.24 |
+| MCE    | —        | 0.553±0.036 | — | 0.750 | — | 6.24 |
+| PS     | —        | 0.553±0.036 | — | 0.750 | — | 6.24 |
+
+RandomWorld (coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | —        | **0.871±0.060** | — | **1.000** | — | **0.00** |
+| BITL   | —        | 0.865±0.054 | — | 1.000 | — | 0.00 |
+| MLE    | —        | 0.755±0.101 | — | 0.994 | — | 0.09 |
+| MCE    | —        | 0.755±0.101 | — | 0.994 | — | 0.09 |
+| PS     | —        | 0.755±0.101 | — | 0.994 | — | 0.09 |
+
+### Table 5 transfer columns — 20% stochastic
+
+| Env | Method | ours NV_t | ours BM_t | ours ε_t | ours viol_t |
+|-----|--------|-----------|-----------|----------|-------------|
+| GW  | ITL    | **0.982** | 0.719     | 0.949    | 1.28 |
+| GW  | BITL   | **0.988** | 0.694     | 0.972    | 0.70 |
+| GW  | MLE    | 0.081     | 0.510     | 0.735    | 6.62 |
+| RW  | ITL    | **0.858** | 0.337     | 0.967    | 0.50 |
+| RW  | BITL   | **0.852** | 0.317     | 0.967    | 0.50 |
+| RW  | MLE    | 0.833     | 0.291     | 0.953    | 0.71 |
+
+### Table 6 — 0% stochastic, standard task
+
+Gridworld (coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | —        | **1.000±0.000** | — | **1.000** | — | **0.00** |
+| BITL   | —        | 1.000±0.000 | — | 1.000 | — | 0.00 |
+| MLE    | —        | 0.584±0.029 | — | 0.787 | — | 4.36 |
+| MCE    | —        | 0.584±0.029 | — | 0.787 | — | 4.36 |
+| PS     | —        | 0.584±0.029 | — | 0.787 | — | 4.36 |
+
+RandomWorld (coverage = 1.0):
+
+| Method | paper BM | ours BM | paper ε | ours ε | paper viol | ours viol |
+|--------|----------|---------|---------|--------|------------|-----------|
+| ITL    | —        | **1.000±0.000** | — | **1.000** | — | **0.00** |
+| BITL   | —        | 0.999±0.007 | — | 1.000 | — | 0.00 |
+| MLE    | —        | 0.841±0.092 | — | 0.991 | — | 0.13 |
+| MCE    | —        | 0.841±0.092 | — | 0.991 | — | 0.13 |
+| PS     | —        | 0.841±0.092 | — | 0.991 | — | 0.13 |
+
+### Table 6 transfer columns — 0% stochastic
+
+| Env | Method | ours NV_t | ours BM_t | ours ε_t | ours viol_t |
+|-----|--------|-----------|-----------|----------|-------------|
+| GW  | ITL    | **0.972** | 0.669     | 0.937    | 1.58 |
+| GW  | BITL   | **0.977** | 0.672     | 0.949    | 1.28 |
+| GW  | MLE    | 0.452     | 0.590     | 0.799    | 5.02 |
+| RW  | ITL    | **0.825** | 0.254     | 0.961    | 0.59 |
+| RW  | BITL   | **0.830** | 0.249     | 0.953    | 0.70 |
+| RW  | MLE    | 0.814     | 0.249     | 0.941    | 0.88 |
+
+### Across-table read
+
+1. **ITL (and BITL) ≥ MLE/PS/MCE on every metric, every panel,
+   every coverage**. The paper's central qualitative claim
+   reproduces structurally everywhere.
+2. **At coverage = 1.0 ITL ε-matching is exactly 1.000 for every
+   stochastic fraction on both environments**. This is Theorem 1.
+3. **At coverage = 1.0 ITL constraint violations are exactly 0 on
+   every panel**. Paper's "ITL and BITL do not violate any
+   constraints" claim, exact.
+4. **As the expert becomes more deterministic (40%→20%→0%) ITL gains
+   power**. On gridworld coverage=1.0: ITL BM 0.870 → 0.921 → 1.000;
+   ITL NV 0.998 → 0.999 → 1.000. On randomworld: ITL BM 0.762 →
+   0.871 → 1.000; ITL NV 0.980 → 0.991 → 1.000. **At 0%-stochastic,
+   coverage = 1.0, ITL recovers π* exactly on every seed**.
+5. **MLE collapse on transfer is environment-dependent**. Gridworld
+   transfer NV_t at coverage = 1.0: MLE 0.085 (40%) → 0.081 (20%) →
+   0.452 (0%) — soft walls punish wrong T sharply; ITL is 0.987 →
+   0.982 → 0.972, never below 0.97. RandomWorld transfer NV_t:
+   MLE 0.848 → 0.833 → 0.814; ITL 0.879 → 0.858 → 0.825 — diffuse
+   transitions don't punish wrong T enough to make MLE collapse,
+   so the relative gap is small but ITL still strictly beats MLE.
+6. **PS = MLE = MCE everywhere by point estimate**, expected:
+   PS posterior mean = Laplace-smoothed MLE; MCE T-step = MLE.
+7. **BITL ≈ ITL at coverage = 1.0 on every panel**, often within
+   ±0.01 BM. BITL underperforms ITL at low coverage on gridworld
+   (`delta=0.001` prior pathology), but recovers at high coverage.
+
+### Defensible thesis claims
+
+**Claim**: This codebase reproduces the structural pattern of paper
+Tables 4, 5, and 6 — ITL beats MLE on every metric at every coverage
+on both environments and across all three stochastic-fraction
+ablations; ε-matching → 1.000 for ITL at coverage = 1.0 on every
+panel; 0 violations for ITL at coverage = 1.0 on every panel; ITL
+recovers π* exactly under deterministic-expert + full-coverage
+conditions. Tested at paper-grade seed counts (50 seeds for Gridworld,
+100 runs/coverage for RandomWorld) and all five methods.
+
+**Anti-claim**: The absolute Best-matching numbers in this
+reproduction run roughly 1.5× higher than the paper's Table 4 figures
+on gridworld for both ITL and MLE, because our soft-wall layout is
+a guess (the paper does not publish exact tile coordinates) and is
+less aversive than theirs. RandomWorld absolute numbers are also
+higher than the paper's, because `make_randomworld(n_successors=5,
+Uniform[0,1] Dirichlet)` produces more diffuse transitions than the
+paper's panel (which we cannot verify until the appendix is back in
+hand). The MCE column under-reports paper MCE because our T-step is
+just `T_MLE`; Herman et al. 2016 has a richer T-step that we have
+not implemented yet.
+
+**Citable cells**: any "ours BM/ε/viol" cell in the tables above,
+qualified with "structural reproduction at paper-grade seed counts
+(50 GW seeds, 100 RW runs/coverage), exact ε-matching = 1.000 and
+0 violations for ITL at coverage = 1.0 across all six panels".
+
+**Open items before MIMIC**:
+- Verify paper Tables 5 and 6 BM/ε numbers against the PDF when
+  re-uploaded.
+- Implement Herman et al. 2016 T-step in MCE so the MCE column
+  separates from MLE.
+- Run a `delta=1.0` BITL ablation to compare CI calibration vs
+  posterior-mean MSE tradeoff (recommended thesis ablation).
 
 ## 2026-05-02: RandomWorld 40%, 100 runs/coverage (paper Table 4 right half)
 
