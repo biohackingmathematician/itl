@@ -382,6 +382,57 @@ Output tables at:
 - `results/tables/gridworld_transfer_sf020.json`
 - `results/tables/randomworld_transfer_sf020.json`
 
+## 2026-05-02: Gridworld 0% stochastic, 50 seeds (paper Table 6 left half)
+
+Configuration matches paper Table 6 (Gridworld panel) exactly: 5×5
+gridworld, **0% stochastic-policy states (deterministic expert)**, all
+other constants identical. 50 seeds. Run via `STOCHASTIC_FRACTION=0.0
+RUN_BASELINES=1 RUN_BITL=1 N_SEEDS=50 python -m experiments.run_gridworld`.
+Wall-clock ~36 minutes.
+
+### Headline at coverage = 1.0
+
+| Method  | Normalized Value | Best matching | ε-matching | # Violations |
+|---------|------------------|---------------|------------|--------------|
+| **ITL** | **1.000 ± 0.000** | **1.000 ± 0.000** | **1.000**  | **0.00** |
+| **BITL**| **1.000 ± 0.000** | **1.000 ± 0.000** | **1.000**  | **0.00** |
+| MLE     | 0.417 ± 0.092    | 0.584 ± 0.029 | 0.787      | 4.36     |
+| PS      | 0.417 ± 0.092    | 0.584 ± 0.029 | 0.787      | 4.36     |
+| MCE     | 0.417 ± 0.092    | 0.584 ± 0.029 | 0.787      | 4.36     |
+
+### Coverage sweep (Normalized Value)
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.065 | 0.096 | 0.035 | 0.065 | 0.065 |
+| 0.4 | 0.132 | 0.317 | 0.153 | 0.132 | 0.132 |
+| 0.6 | 0.207 | 0.607 | 0.341 | 0.207 | 0.207 |
+| 0.8 | 0.343 | 0.928 | 0.626 | 0.343 | 0.343 |
+| 1.0 | 0.417 | 1.000 | 1.000 | 0.417 | 0.417 |
+
+### What 0% gives us
+
+- **ITL recovers the optimal policy exactly at coverage = 1.0**:
+  NV=1.000±0.000, BM=1.000±0.000, ε-match=1.000, 0 violations on
+  every one of 50 seeds. With a fully deterministic expert and full
+  coverage, the ε-ball at every state collapses to the singleton
+  optimal action, the QP becomes essentially equality-constrained,
+  and ITL's linearization converges to T*-equivalent (modulo the
+  unidentifiable null space of unvisited (s, a)).
+- **BITL also recovers exactly** at coverage = 1.0 (NV=1.000±0.000).
+  At low coverage BITL still underperforms because of the `delta=0.001`
+  prior pathology, but the gap closes as coverage increases.
+- **MLE NV improves from 0.148 (40%) → 0.148 (20%) → 0.417 (0%)** at
+  coverage = 1.0. Why? With a deterministic expert, every visited
+  (s, a) pair is the *single* optimal action at that state, so MLE
+  gets a much more concentrated estimate of T(s'|s, π*(s)). It still
+  has 4.36 violations because the unvisited (s, a) pairs (non-optimal
+  actions) are uniform-Laplace, which fails the ε-ball at those
+  states — but its policy is computed only from optimal-action
+  estimates, which are good.
+
+Output table at `results/tables/gridworld_coverage_sweep_sf000.json`.
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
