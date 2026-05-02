@@ -478,6 +478,68 @@ experiments.run_randomworld`. Wall-clock ~18 minutes.
 
 Output table at `results/tables/randomworld_coverage_sweep_sf000.json`.
 
+## 2026-05-02: Transfer task 0% stochastic, both envs (paper Table 6 transfer)
+
+Configuration: gridworld at 50 seeds, randomworld at 100 runs/coverage,
+deterministic expert, all five methods. Run via `STOCHASTIC_FRACTION=0.0
+RUN_BASELINES=1 RUN_BITL=1 ENV=both N_SEEDS=50 N_WORLDS=20 N_DATASETS=5
+python -m experiments.run_transfer`. Wall-clock ~43 minutes.
+
+### Headline transfer NV at coverage = 1.0
+
+| Method | Gridworld NV_t | RandomWorld NV_t |
+|--------|----------------|------------------|
+| **ITL**  | **0.972**      | **0.825**        |
+| **BITL** | **0.977**      | **0.830**        |
+| MLE      | 0.452          | 0.814            |
+| PS       | 0.452          | 0.814            |
+| MCE      | 0.452          | 0.814            |
+
+### Coverage sweep (NV_t)
+
+Gridworld:
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.085 | 0.075 | 0.000 | 0.085 | 0.085 |
+| 0.4 | 0.155 | 0.234 | 0.082 | 0.155 | 0.155 |
+| 0.6 | 0.238 | 0.513 | 0.240 | 0.238 | 0.238 |
+| 0.8 | 0.387 | 0.837 | 0.530 | 0.387 | 0.387 |
+| 1.0 | 0.452 | 0.972 | 0.977 | 0.452 | 0.452 |
+
+RandomWorld:
+
+| Coverage | MLE | ITL | BITL | PS | MCE |
+|----------|-----|-----|------|-----|-----|
+| 0.2 | 0.784 | 0.790 | 0.776 | 0.784 | 0.784 |
+| 0.4 | 0.791 | 0.795 | 0.782 | 0.791 | 0.791 |
+| 0.6 | 0.794 | 0.807 | 0.807 | 0.794 | 0.794 |
+| 0.8 | 0.807 | 0.821 | 0.816 | 0.807 | 0.807 |
+| 1.0 | 0.814 | 0.825 | 0.830 | 0.814 | 0.814 |
+
+### What this tells us
+
+- **Gridworld**: ITL transfer NV @ cov=1.0 = 0.972 vs MLE = 0.452.
+  MLE doesn't collapse as hard at 0% (0.452 vs 0.081 at 40%) because
+  a deterministic expert + full coverage gives MLE concentrated
+  estimates for the optimal-action (s, π*(s), s') triples, so its
+  policy on the *standard* task is reasonable. But under the
+  reward-swapped transfer task, MLE's wrong T at non-optimal-action
+  rows still gets exposed, hence the ~0.5 NV gap.
+- **RandomWorld**: ITL = 0.825 vs MLE = 0.814 — same small gap
+  pattern as the 40% and 20% transfer sweeps. Diffuse RandomWorld
+  transitions don't punish wrong T enough to make transfer NV
+  collapse for MLE; the structural ITL > MLE > 0 pattern still
+  holds at every coverage.
+- **BITL ≥ ITL on both envs at full coverage**: BITL = 0.977 vs ITL
+  = 0.972 on gridworld; BITL = 0.830 vs ITL = 0.825 on randomworld.
+  With a deterministic expert the constraint set is sharp and the
+  HMC posterior concentrates around the ITL solution.
+
+Output tables at:
+- `results/tables/gridworld_transfer_sf000.json`
+- `results/tables/randomworld_transfer_sf000.json`
+
 ## 2026-05-01 update: full 50-seed Gridworld reproduction
 
 Configuration matches paper Table 4 exactly: 5×5 Gridworld, soft walls,
