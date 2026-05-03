@@ -1,5 +1,5 @@
 \documentclass[11pt]{article}
-\usepackage[top=0.7in,bottom=0.75in,left=0.85in,right=0.85in]{geometry}
+\usepackage[top=0.55in,bottom=0.6in,left=0.8in,right=0.8in]{geometry}
 \usepackage{graphicx}
 \usepackage{amsmath, amssymb}
 \usepackage{lmodern}
@@ -11,17 +11,16 @@
 \usepackage{titlesec}
 \usepackage{tikz}
 \usepackage{multicol}
-\usetikzlibrary{arrows.meta, positioning, calc}
+\usetikzlibrary{arrows.meta, positioning, calc, patterns}
 \titlespacing*{\section}{0pt}{6pt}{2pt}
 \titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
-\setlength{\parskip}{2pt}
+\setlength{\parskip}{1pt}
 \setlength{\parindent}{1em}
 \setlength{\textfloatsep}{6pt plus 1pt minus 1pt}
 \setlength{\floatsep}{6pt plus 1pt minus 1pt}
 \setlength{\intextsep}{6pt plus 1pt minus 1pt}
 \frenchspacing
 
-% Reusable TikZ styles
 \tikzset{
   block/.style={rectangle, draw, rounded corners=2pt, minimum height=0.55cm,
                 inner sep=2.5pt, font=\scriptsize, align=center},
@@ -31,7 +30,7 @@
 }
 
 \title{\vspace{-2em}Inverse Transition Learning from Expert Demonstrations:\\
-\large Reproduction and a Joint Reward--Dynamics Extension}
+\large Reproduction and a Joint Reward and Dynamics Extension}
 \author{Agna Chan \\ \small Columbia University \quad Advisor: Prof.\ Bianca Dumitrascu}
 \date{\small May 2026}
 
@@ -41,16 +40,16 @@
 
 \section{Motivation and question}
 
-Standard reinforcement learning knows the dynamics $T$ of a Markov decision process and wants the optimal policy $\pi^{*}$. Many real settings invert that assumption: \cite{benac2024itl} uses an intensive care unit as its running example, where outcomes are observable but how a patient responds to a particular dose is not, and what we see is a batch of clinician decisions that are close to optimal but not exactly optimal.
+Standard reinforcement learning knows the dynamics $T$ of a Markov decision process and wants the optimal policy $\pi^{*}$. Many real settings invert that assumption. The paper this thesis builds on [1] uses an intensive care unit as its running example, where outcomes are observable but how a patient responds to a particular dose is not, and what we see is a batch of clinician decisions that are close to optimal but not exactly optimal.
 
-My broader interest sits downstream of this in personalized wellness technology: the wearable stack (Apple Watch, Oura, WHOOP, continuous glucose monitors). Most consumer pipelines fit a supervised model from user action to outcome, treating every body as a shared-dynamics black box and prescribing one-size-fits-all interventions. Inverse Transition Learning (ITL) takes a different posture: the user is a near-optimal decision-maker whose actions encode information about their own physiology, and that signal is exactly what maximum-likelihood-over-counts throws away. The semester's technical question: given $R$ and a batch of $\varepsilon$-optimal expert transitions $D = \{(s, a, s')\}$, can we recover $T^{*}$ in a way that respects the optimality information in the actions?
+My broader interest is in predictive wellness and longevity, the platform I am building under the working name \emph{Quantivida}. The consumer frontier today has two shapes: wearables (Apple Watch, Oura, WHOOP, continuous glucose monitors) collecting dense longitudinal physiology, and biomarker services like Function Health collecting rich but infrequent blood panels. Both feed downstream pipelines that fit population-level supervised models from \emph{user action} to \emph{outcome}, treating every body as a shared-dynamics black box and prescribing one-size-fits-all interventions. ITL takes a different posture: when a person makes near-optimal decisions about their own health, those decisions encode information about how their personal physiology responds, and that signal is exactly what maximum likelihood over counts throws away. Recovering individualized dynamics from those decisions is the methodological gap I want to work in. The semester's technical question: given $R$ and a batch of $\varepsilon$-optimal expert transitions $D = \{(s, a, s')\}$, can we recover $T^{*}$ in a way that respects the optimality information in the actions?
 
 \begin{figure}[!htbp]
 \centering
-\begin{minipage}[c]{0.52\textwidth}
+\begin{minipage}[c]{0.54\textwidth}
 \centering
 \textbf{(a)} ITL pipeline\\[2pt]
-\begin{tikzpicture}[node distance=0.35cm and 0.4cm, scale=0.78, transform shape]
+\begin{tikzpicture}[node distance=0.35cm and 0.4cm, scale=0.68, transform shape]
   \node[io] (data) {$D=\{(s,a,s')\}$};
   \node[io, below=of data] (rew) {$R,\,\gamma,\,\varepsilon$};
   \node[block, right=of data, fill=blue!5] (mle) {$T^{\mathrm{MLE}}$\\Laplace};
@@ -58,14 +57,14 @@ My broader interest sits downstream of this in personalized wellness technology:
   \node[io, right=of qp, fill=green!5] (out) {$\hat T$};
   \node[block, below=of qp, fill=blue!5] (pi) {$\hat\pi$ (Alg.~1)};
   \draw[flow] (data) -- (mle);
-  \draw[flow] (rew.east) -- ++(0.15,0) |- (qp.south west);
+  \draw[flow] (rew.east) ++(0.05,0) |- (qp.south west);
   \draw[flow] (mle) -- (qp);
   \draw[flow] (qp) -- (out);
   \draw[flow, dashed] (qp.south) -- (pi.north);
   \draw[flow, dashed] (pi.west) -| ($(mle.south)+(-0.18,-0.05)$) -- (mle.south);
 \end{tikzpicture}\\[8pt]
 \textbf{(b)} I/O contrast: ITL vs.\ ITL+IRL\\[2pt]
-\begin{tikzpicture}[node distance=0.32cm and 0.32cm, scale=0.78, transform shape]
+\begin{tikzpicture}[node distance=0.32cm and 0.32cm, scale=0.68, transform shape]
   \node[font=\scriptsize\bfseries, anchor=east] (lab1) at (0,0.4) {ITL};
   \node[io, right=0.05cm of lab1] (in1) {$D,\,R,\,\gamma$};
   \node[block, right=of in1] (box1) {ITL solver};
@@ -73,62 +72,68 @@ My broader interest sits downstream of this in personalized wellness technology:
   \draw[flow] (in1) -- (box1);
   \draw[flow] (box1) -- (out1);
   \node[font=\scriptsize\bfseries, anchor=east] (lab2) at (0,-0.7) {ITL$+$IRL};
-  \node[io, right=0.05cm of lab2] (in2) {$D,\,\Phi,\,\gamma$\\$+$ anchor};
+  \node[io, right=0.05cm of lab2] (in2) {$D,\,\Phi,\,\gamma$\,$+$ anchor};
   \node[block, right=of in2, fill=black!5] (box2) {Joint solver\\alt.\ $T,w$};
   \node[io, right=of box2, fill=green!5] (out2) {$\hat T,\hat w$\\$\hat R{=}\Phi\hat w$};
   \draw[flow] (in2) -- (box2);
   \draw[flow] (box2) -- (out2);
 \end{tikzpicture}
 \end{minipage}\hfill
-\begin{minipage}[c]{0.44\textwidth}
+\begin{minipage}[c]{0.42\textwidth}
 \centering
-\textbf{(c)} Normalized Value vs.\ coverage\\[2pt]
-\includegraphics[width=\textwidth]{gridworld_nv.png}
+\textbf{(c)} Result on Gridworld (50 seeds)\\[2pt]
+\includegraphics[width=\textwidth]{gridworld_nv.png}\\[6pt]
+\textbf{(d)} $\varepsilon$-ball intuition\\[2pt]
+\begin{tikzpicture}[scale=0.50, transform shape]
+  \draw[->, thick] (0,0) -- (4.6,0) node[right, font=\scriptsize] {$a$};
+  \draw[->, thick] (0,0) -- (0,2.5) node[above, font=\scriptsize] {$Q^{*}$};
+  \fill[blue!25] (0.4,0) rectangle (1.1,2.1);
+  \fill[red!55] (1.4,0) rectangle (2.1,1.8);
+  \fill[blue!25] (2.4,0) rectangle (3.1,0.9);
+  \fill[blue!25] (3.4,0) rectangle (4.1,0.5);
+  \node[font=\scriptsize] at (0.75,-0.3) {$a_1$};
+  \node[font=\scriptsize] at (1.75,-0.3) {$a^{\dagger}$};
+  \node[font=\scriptsize] at (2.75,-0.3) {$a_3$};
+  \node[font=\scriptsize] at (3.75,-0.3) {$a_4$};
+  \draw[dashed, gray!70] (0,2.1) -- (4.5,2.1);
+  \draw[dashed, gray!70] (0,1.5) -- (4.5,1.5);
+  \draw[<->, thick] (4.55,2.1) -- (4.55,1.5) node[midway, right, font=\tiny] {$\varepsilon$};
+\end{tikzpicture}
 \end{minipage}
-\caption{(a) ITL pipeline: the QP projects $T$ toward $T^{\mathrm{MLE}}$ subject to $\varepsilon$-optimality of observed actions; $\hat\pi$ and the QP alternate until convergence. (b) The proposed extension lifts $R$ into a decision variable $R = \Phi w$ and recovers $(\hat T, \hat w)$ jointly. (c) On Gridworld, ITL plateaus near $1.0$ at full coverage and dominates MLE at every coverage level (5 seeds; bands $\pm 1$ std.).}
+\caption{(a) ITL pipeline: the QP projects $T$ toward $T^{\mathrm{MLE}}$ subject to $\varepsilon$-optimality of observed actions; $\hat\pi$ and the QP alternate until convergence. (b) The extension lifts $R$ into a decision variable $R = \Phi w$ and recovers $(\hat T, \hat w)$ jointly. (c) Normalized Value vs.\ coverage on Gridworld: ITL plateaus near $1.0$ at full coverage and dominates MLE everywhere (50 seeds; bands $\pm 1$ std.). (d) Observing expert action $a^{\dagger}$ enforces $Q^{*}(s,a_{\max}){-}Q^{*}(s,a^{\dagger}){\le}\varepsilon$, a linear constraint on $T$ after linearizing the policy-evaluation inverse at $T^{\mathrm{MLE}}$.}
 \label{fig:mech}
 \end{figure}
 
 \section{Method and tools}
 
-An action $a$ is $\varepsilon$-optimal at state $s$ when $\max_{a'} Q^{*}(s, a'; T) - Q^{*}(s, a; T) \le \varepsilon$. Observing the expert choose $a$ at $s$ yields an inequality on $Q^{*}$. Writing the policy-evaluation inverse $v^{\pi} = (I - \gamma P^{\pi})^{-1} r^{\pi}$ and substituting the Laplace-smoothed MLE $T^{\mathrm{MLE}}$ inside it linearizes the constraint in $T$, giving
+An action $a$ is $\varepsilon$-optimal at state $s$ when $\max_{a'} Q^{*}(s, a'; T) {-} Q^{*}(s, a; T) {\le} \varepsilon$ (Fig.~\ref{fig:mech}d). Observing the expert choose $a$ at $s$ yields an inequality on $Q^{*}$. Writing the policy-evaluation inverse $v^{\pi} = (I {-} \gamma P^{\pi})^{-1} r^{\pi}$ and substituting the Laplace-smoothed MLE $T^{\mathrm{MLE}}$ inside it linearizes the constraint in $T$, giving
 \begin{equation*}
-\min_{T} \;\; \tfrac{1}{2}\sum_{s,a,s'} N_{s,a,s'} \bigl(T_{s,a,s'} - T^{\mathrm{MLE}}_{s,a,s'}\bigr)^{2}
+\min_{T} \;\; \tfrac{1}{2}\sum_{s,a,s'} N_{s,a,s'} \bigl(T_{s,a,s'} {-} T^{\mathrm{MLE}}_{s,a,s'}\bigr)^{2}
 \quad \text{s.t.} \quad
 \text{$\varepsilon$-ball on $(s,a) \in D$, simplex on $T$.}
 \end{equation*}
-The solver alternates between $\hat\pi$ (uniform over observed actions; uniform over all actions at unobserved states) and the QP, terminating when the $\varepsilon$-ball property holds at every observed state (Fig.~\ref{fig:mech}a). The convex pieces map onto Krause and H\"ubotter \cite[Ch.~10--11]{krause2025pai}: Bellman optimality, the linear policy-evaluation system, and the Dirichlet--Categorical conjugacy that makes the Laplace-smoothed MLE a posterior mean rather than a frequentist estimate. Implementation: CVXPY \cite{diamond2016cvxpy} with an OSQP--SCS--CLARABEL fallback chain.
+The solver alternates between $\hat\pi$ (uniform over observed actions; uniform over all actions at unobserved states) and the QP, terminating when the $\varepsilon$-ball property holds at every observed state (Fig.~\ref{fig:mech}a). The convex pieces map onto Krause and H\"ubotter [2, Ch.\ 10, 11]: Bellman optimality, the linear policy-evaluation system, and the Dirichlet, Categorical conjugacy that makes the Laplace-smoothed MLE a posterior mean rather than a frequentist estimate. Implementation: CVXPY with an OSQP, SCS, CLARABEL fallback chain.
 
 \section{Simulation: coverage sweep on Gridworld}
 
-I reproduced the paper's central claim (their Figure~2) on a 5$\times$5 Gridworld with soft walls (penalty $-5$), slip $0.2$, $\gamma{=}0.95$, $\varepsilon{=}5.0$, 40\%-stochastic expert. \emph{Coverage} is the fraction of states appearing in $D$; for each observed $(s,a)$ I sampled 10 transitions. At full coverage, ITL achieves Normalized Value $0.998 \pm 0.001$ vs.\ MLE's $0.142 \pm 0.002$, with $0$ vs.\ $7.20$ constraint violations and $\varepsilon$-matching $1.000$ vs.\ $0.712$ (5 seeds; Fig.~\ref{fig:mech}c). MLE under-counts visited next-state cells under a stochastic expert, so its greedy policy walks into soft walls; ITL forces the expert's observed choices to remain $\varepsilon$-optimal under $\hat T$. Shape matches the paper's Figure~2; absolute scale runs $\sim 1.5\times$ larger than Table~4, almost certainly because the soft-wall layout is not published in detail. The structural pattern (ITL $\ge$ MLE on every metric, $\varepsilon$-matching $\to 1.0$ at full coverage per Theorem~1) holds on both Gridworld and RandomWorld.
+I reproduced the paper's central claim (their Figure~2) on a 5$\times$5 Gridworld with soft walls (penalty $-5$), slip $0.2$, $\gamma{=}0.95$, $\varepsilon{=}5.0$, 40\% stochastic expert. \emph{Coverage} is the fraction of states appearing in $D$; for each observed $(s,a)$ I sampled 10 transitions. At full coverage over the 50 seed sweep, ITL achieves Normalized Value $0.998 \pm 0.004$ vs.\ MLE's $0.141 \pm 0.004$, with $0.00$ vs.\ $7.24$ constraint violations, $\varepsilon$-matching $1.000$ vs.\ $0.710 \pm 0.017$, and best matching $0.870 \pm 0.070$ vs.\ $0.534 \pm 0.048$ (Fig.~\ref{fig:mech}c). MLE under-counts visited next-state cells under a stochastic expert, so its greedy policy walks into soft walls; ITL forces the expert's observed choices to remain $\varepsilon$-optimal under $\hat T$. Shape matches the paper's Figure~2; absolute scale runs $\sim 1.5\times$ larger than Table~4, almost certainly because the soft-wall layout is not published in detail. The structural pattern (ITL $\ge$ MLE on every metric, $\varepsilon$-matching $\to 1.0$ at full coverage per Theorem~1) reproduces on a 100-run RandomWorld sweep, although the gap is smaller there because RandomWorld's diffuse dynamics put MLE much closer to truth.
 
 \section{Open question: joint reward and dynamics recovery}
 
-The paper assumes $R$ is known. In MIMIC-IV that is fragile: the survival proxy reward ($\pm 15$ for discharge or mortality, after \cite{komorowski2018aic}) is hand-engineered. The extension I have been prototyping, named in the paper's future-work section, lifts $R$ into a decision variable $R(s,a) = \Phi(s,a)^{\top} w$ and solves for $(T, w)$ jointly (Fig.~\ref{fig:mech}b). The $\varepsilon$-ball constraint becomes
+The paper assumes $R$ is known. In MIMIC-IV that is fragile: the survival proxy reward ($\pm 15$ for discharge or mortality, after [4]) is hand-engineered. In the longevity setting it is even more fragile, since healthspan and recovery are noisy proxies inferred from the very signals we are modeling. The extension lifts $R$ into a decision variable $R(s,a) = \Phi(s,a)^{\top} w$ and solves for $(T, w)$ jointly (Fig.~\ref{fig:mech}b). The $\varepsilon$-ball constraint becomes
 \begin{equation*}
-\bigl(\Phi(s,a) - \Phi(s,a')\bigr)^{\top} w + \gamma\,(T_{s,a} - T_{s,a'})^{\top} v_{\mathrm{lin}} \;\ge\; \varepsilon,
+\bigl(\Phi(s,a) {-} \Phi(s,a')\bigr)^{\top} w {+} \gamma\,(T_{s,a} {-} T_{s,a'})^{\top} v_{\mathrm{lin}} \;\ge\; \varepsilon,
 \end{equation*}
-bilinear in $(T, w)$ but a convex QP at each step of the alternation (hold $w$, solve for $T$; hold $T$, solve for $w$). An L1 penalty on $w$ plus an anchor at one $(s,a)$ pin the additive ambiguity. The prototype converges to a fixed point in two outer iterations on both the 3-state corridor and the 5$\times$5 Gridworld. On Gridworld with one-hot $(s,a)$ features ($d=100$), goal-anchored at $R(s^{*},0)=10$, $\lambda_{L1}=0.01$, deterministic expert: ITL+IRL recovers the optimal policy exactly (best-action $1.000$ vs.\ ITL with known $R$ $1.000$ vs.\ MLE $0.600$); $T$ MSE $0.4873$ vs.\ $0.4929$ (ITL) vs.\ $0.5154$ (MLE). \emph{Honest caveat:} this gridworld is goal-dominated --- pairing $T_{\mathrm{MLE}}$ with a trivial reward $R{=}10\cdot\mathbf{1}[s{=}s^{*}]$ recovers $\pi^{*}$ at the same rate as pairing it with $R^{*}$, so a $1.000$ best-action match is necessary but not sufficient evidence that the IRL step is doing real work. A two-goal benchmark ($R_A{=}5$, $R_B{=}10$) and a head-to-head against MaxEnt-IRL \cite{ziebart2008maxent} (wired in via L-BFGS-B with a null-space anchor) are the next falsifiers before May~31.
+bilinear in $(T, w)$ but a convex QP at each step of the alternation. An L1 penalty on $w$ plus an anchor at one $(s,a)$ pin the additive ambiguity. The prototype converges in two outer iterations on both the 3 state corridor and the 5$\times$5 Gridworld; with one-hot $(s,a)$ features ($d{=}100$), goal anchored, deterministic expert, ITL+IRL recovers $\pi^{*}$ exactly (best action $1.000$ vs.\ ITL $1.000$ vs.\ MLE $0.600$; $T$ MSE $0.4873$ vs.\ $0.4929$ vs.\ $0.5154$). \emph{Honest caveat:} this gridworld is goal dominated. Pairing $T_{\mathrm{MLE}}$ with a trivial reward $R{=}10\cdot\mathbf{1}[s{=}s^{*}]$ recovers $\pi^{*}$ at the same rate as $R^{*}$, so a $1.000$ match is necessary but not sufficient evidence that the IRL step is doing real work. A two-goal benchmark and a head-to-head against MaxEnt-IRL [3] (wired in via L-BFGS-B) are the next falsifiers.
 
-\paragraph{Implications for personalized wellness.} The reproduction confirms that under near-optimal behavior, individual-level dynamics are recoverable from sparse demonstrations in a way supervised models miss. The joint reward extension matters more for wearables than the ICU: sleep-quality and recovery scores are noisy user proxies, so jointly inferring $R$ with $T$ removes the most fragile assumption in any wearables pipeline. The continuous-state lift is the gating step before this transfers to raw sensor streams.
+\paragraph{Implications and roadmap.} For predictive longevity this means modeling how a specific person's biomarker trajectory evolves under their own choices, rather than fitting a population-average dose response. Recovery scores and healthspan signals are noisy user proxies, so jointly inferring $R$ with $T$ removes the most fragile assumption in any wellness pipeline. The continuous-state lift is the gating step before this transfers to raw sensor streams and is the thread Quantivida is built around. Deliverable: a white paper by 15 May 2026; thesis writing is deferred past the semester and the work continues afterward. Codebase: \url{https://github.com/biohackingmathematician/itl} (MIT, Python 3.10, CVXPY) with 8 pytest smoke tests covering corridor exact-value, ITL convergence, BITL constraint set, MCE recovery, ITL+IRL recovery, and the goal-domination invariant.
 
-\paragraph{Code.} Reproduction codebase (Python 3.10, CVXPY, MIT) at \url{https://github.com/biohackingmathematician/itl}, with inline cross-references to paper equations and textbook chapters and 8 pytest smoke tests covering the corridor value function, ITL convergence, BITL constraint regression, and the goal-domination invariant. A Colab re-running the corridor and gridworld experiments will be linked from the README.
-
-\noindent\textbf{\footnotesize References}\vspace{-0.5em}
-\begin{multicols}{2}
-{\scriptsize\raggedright
-\renewcommand{\section}[2]{}%
-\renewcommand{\refname}{}%
-\begin{thebibliography}{9}
-\setlength{\itemsep}{0pt}
-\setlength{\parsep}{0pt}
-\bibitem{benac2024itl} Benac, L., et al.\ (2024). Inverse Transition Learning. \emph{AAAI 2025} (preprint).
-\bibitem{krause2025pai} Krause, A., and H\"ubotter, J.\ (2025). \emph{Probabilistic Artificial Intelligence}. Cambridge Univ.\ Press, Ch.\ 10--12.
-\bibitem{ziebart2008maxent} Ziebart, B.~D., et al.\ (2008). Maximum Entropy Inverse Reinforcement Learning. \emph{Proc.\ AAAI}.
-\bibitem{komorowski2018aic} Komorowski, M., et al.\ (2018). The AI Clinician learns optimal treatment strategies for sepsis in ICU. \emph{Nature Medicine} 24, 1716--1720.
-\bibitem{diamond2016cvxpy} Diamond, S., and Boyd, S.\ (2016). CVXPY: A Python-Embedded Modeling Language for Convex Optimization. \emph{JMLR} 17(83), 1--5.
-\end{thebibliography}}
-\end{multicols}
+\vspace{-0.3em}
+{\scriptsize \noindent\textbf{References.}\ %
+\refstepcounter{section}%
+[1] Benac et al.\ (2024), Inverse Transition Learning, \emph{AAAI 2025} preprint.\hspace{0.6em}%
+[2] Krause and H\"ubotter (2025), \emph{Probabilistic Artificial Intelligence}, Cambridge Univ.\ Press, Ch.\ 10 to 12.\hspace{0.6em}%
+[3] Ziebart et al.\ (2008), Maximum Entropy IRL, \emph{Proc.\ AAAI}.\hspace{0.6em}%
+[4] Komorowski et al.\ (2018), The AI Clinician for sepsis in the ICU, \emph{Nature Medicine} 24, 1716 to 1720.\par}
 
 \end{document}
