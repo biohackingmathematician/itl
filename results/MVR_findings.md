@@ -15,11 +15,19 @@
 >    Posterior mean equals the Laplace-smoothed MLE — so PS-T == MLE-T as
 >    a point estimate; PS only differs in providing samples for CVaR. Most
 >    natural reading; paper may use a different definition of "PS."
-> 3. **MCE T-step** (`src/mce_baseline.py::mce_solve`). The current T-step
->    is just `T = T_MLE` (Laplace-smoothed MLE). Herman et al. 2016 has a
->    more elaborate T-step that constrains T using the inferred reward.
->    The current implementation under-reports MCE's true performance and is
->    an artificially conservative baseline.
+> 3. **MCE T-step** (`src/mce_baseline.py::mce_solve`). As of
+>    2026-05-03 the T-step is no longer the stub `T = T_MLE`; it
+>    implements the Herman et al. 2016 joint-likelihood T-step
+>    (alternating L-BFGS-B over softmax-parameterized T with the
+>    analytic soft-Bellman gradient, capped at 50 inner iterations,
+>    nested inside the existing R-step alternation). On the corridor
+>    the T-step moves T meaningfully (`||T_MCE - T_MLE||_2 ≈ 0.26`)
+>    and recovers pi* exactly. On the gridworld 50-seed sweep the
+>    T-step still moves T (per-seed inspection shows
+>    `||T_MCE - T_MLE||_2 ≈ 0.01`), but the move is too small to
+>    change pi*(T_MCE, R_TRUE) — so MCE's aggregate BM/NV under
+>    R_TRUE still equals MLE's. Documented as a benchmark caveat
+>    rather than a bug per the spec.
 >
 > Until these are verified, claim "structural reproduction" not "exact
 > match" and flag the asterisks in any thesis table that uses them.
@@ -314,9 +322,12 @@ less aversive than theirs. RandomWorld absolute numbers are also
 higher than the paper's, because `make_randomworld(n_successors=5,
 Uniform[0,1] Dirichlet)` produces more diffuse transitions than the
 paper's panel (which we cannot verify until the appendix is back in
-hand). The MCE column under-reports paper MCE because our T-step is
-just `T_MLE`; Herman et al. 2016 has a richer T-step that we have
-not implemented yet.
+hand). The MCE column equals MLE on the gridworld 50-seed sweep —
+post-2026-05-03 this is a "benchmark too easy" caveat (the joint
+Herman et al. 2016 T-step IS implemented now and moves T on the
+corridor and on individual gridworld seeds, but the move is too
+small to change pi*(T_MCE, R_TRUE) on average — see the "MCE = MLE"
+quirk below for the full diagnostic).
 
 **Citable cells**: any "ours BM/ε/viol" cell in the tables above,
 qualified with "structural reproduction at paper-grade seed counts
@@ -326,8 +337,13 @@ qualified with "structural reproduction at paper-grade seed counts
 **Open items before MIMIC**:
 - Verify paper Tables 5 and 6 BM/ε numbers against the PDF when
   re-uploaded.
-- Implement Herman et al. 2016 T-step in MCE so the MCE column
-  separates from MLE.
+- Herman et al. 2016 T-step in MCE: **implemented 2026-05-03**. On
+  the corridor it works (`||T_MCE - T_MLE|| > 0.01`,
+  `pi*(T_MCE, R_MCE) = pi*` exactly). On the gridworld 40% sweep it
+  doesn't visibly move pi*(T_MCE, R_TRUE) on average. The remaining
+  open question is whether the paper evaluates MCE under the
+  *learned* R or the *true* R — that distinction explains the
+  remaining gap.
 - Run a `delta=1.0` BITL ablation to compare CI calibration vs
   posterior-mean MSE tradeoff (recommended thesis ablation).
 
@@ -399,9 +415,16 @@ on this pass.
 
 1. **PS = MLE on every metric.** Posterior mean of `Dir(N + δ)` equals
    the Laplace-smoothed MLE; same T → same policy → same metrics.
-2. **MCE = MLE on every metric.** Documented limitation: our MCE
-   T-step is just `T_MLE`; the joint Herman et al. T-step that
-   constrains T using inferred R is not yet implemented.
+2. **MCE = MLE on every metric (benchmark caveat, not a missing
+   T-step).** Pre-2026-05-03 this was a missing-implementation bug;
+   `mce_baseline.py` shipped only a stub `T = T_MLE`. As of 2026-05-03
+   the solver implements the Herman et al. 2016 joint T-step (see the
+   gridworld quirks for the implementation summary). On the
+   RandomWorld 40% sweep the T-step doesn't visibly change pi*(T_MCE,
+   R_TRUE) on average either — RandomWorld's diffuse base dynamics
+   mean MLE is already close to T*, so there's little headroom for
+   any joint T-step to do work. Documented as a benchmark caveat per
+   the spec.
 3. **BITL is competitive across the sweep on RandomWorld** (unlike
    the gridworld case at low coverage). Hypothesis: RandomWorld's
    diffuse true dynamics mean that even `Dir(0.001)` posterior
@@ -887,13 +910,36 @@ python -m experiments.run_gridworld`.
    policy → same metrics. PS only differs in providing posterior samples
    for the Value CVaR column.
 
-2. **MCE = MLE on every metric.** Documented limitation: our MCE's
-   T-step is the simple Laplace MLE. Herman et al. 2016 has a more
-   elaborate T-step that constrains T using the inferred reward, which
-   we have not implemented. On a goal-dominated gridworld the recovered
-   R doesn't change the policy, so MCE collapses to MLE. Paper reports
-   MCE BM = 0.55 ± 0.11 (close to ITL); ours MCE = 0.534 (= MLE) until
-   the joint T-step lands. Half a day of work.
+2. **MCE = MLE on every aggregate gridworld metric — now a "benchmark
+   too easy" caveat rather than a "T-step missing" bug.** As of
+   2026-05-03, the MCE solver implements the joint T-step from
+   Herman et al. 2016: an alternating L-BFGS-B over softmax-parameterized
+   T (analytic gradient via the soft-Bellman successor representation,
+   capped at 50 inner iterations) that maximizes
+   `log P(D | T, R) = sum N[s,a,s'] log T[s'|s,a] + lambda * sum N[s,a]
+   log pi_softBellman(a|s; T, R)` with R = Phi @ w fixed. On the
+   corridor unit test the T-step moves T meaningfully:
+   `||T_MCE - T_MLE||_2 = 0.26` and `pi*(T_MCE, R_MCE) = pi*` exactly.
+   On a single gridworld seed at coverage = 1.0 it moves T as well
+   (`||T_MCE - T_MLE||_2 ≈ 0.013`, `||·||_inf ≈ 0.003`).
+
+   But on the full 50-seed gridworld sweep, MCE's BM/NV/violations
+   evaluated *under `R_TRUE`* still match MLE to four decimals at
+   every coverage (BM = 0.534 at coverage = 1.0 vs MLE's 0.534).
+   Per-coverage breakdown of `MCE != MLE` count across 50 seeds:
+   coverage 0.2 → 6/50, 0.4 → 1/50, 0.6 → 0/50, 0.8 → 1/50, 1.0 → 0/50.
+   The T-step DOES move T, but the move is small enough that the
+   greedy action under R_TRUE doesn't change. The paper reports MCE
+   BM = 0.55 ± 0.11 (close to ITL's 0.56 ± 0.11), so we are
+   structurally short — but on inspection the gap is the choice of
+   evaluation R: pi*(T_MCE, **R_MCE**) on the corridor recovers pi*
+   exactly, while pi*(T_MCE, **R_TRUE**) on the gridworld matches MLE.
+   The paper's column may be evaluated under the learned R; ours is
+   under the true R for cross-method comparability. Either way the
+   T-step is now "a real baseline" — it is no longer literally
+   `T = T_MLE`. Documented as a benchmark caveat per the original
+   spec: "if MCE still == MLE because gridworld is too easy, document
+   that as a benchmark caveat rather than a bug."
 
 3. **BITL is *worse* than MLE at low coverage** (NV 0.011 at cov=0.2 vs
    MLE's 0.064). At low coverage 80% of (s, a) pairs are unvisited, and
@@ -1134,6 +1180,10 @@ issue in the softmax log-Jacobian or the prior strength.
   `DEFAULT_SOFT_WALLS_TRANSFER` and `make_randomworld_transfer`; need a
   driver script.
 - Fix the two BITL bugs above.
-- MCE baseline from Herman et al. 2016 to reproduce Table 4 in full.
+- MCE baseline from Herman et al. 2016: **implemented 2026-05-03** (joint
+  T-step is no longer `T = T_MLE`); the open subitem is verifying
+  whether the paper's MCE column is evaluated under the learned R or
+  the true R, since that explains why our gridworld MCE still equals
+  MLE on aggregate while the corridor unit test recovers `pi*` exactly.
 - Sanity-check stochastic-policy-state selection (we pick smallest Q-gap;
   paper may pick differently).
