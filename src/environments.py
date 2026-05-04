@@ -170,6 +170,172 @@ def gridworld_start_state(grid_size: int = 5) -> int:
 
 
 # =============================================================================
+# 2b. TWO-GOAL GRIDWORLD (non-goal-dominated benchmark for ITL+IRL)
+# =============================================================================
+#
+# Motivation: the standard Gridworld is "goal-dominated" — pi*(T_MLE,
+# R_trivial = 10 * 1[s == goal]) matches pi*(T_MLE, R_TRUE) almost
+# perfectly because all the relevant policy information is "find the
+# unique goal". A reward learner that only locates the goal looks
+# indistinguishable from one that recovers the full reward structure.
+#
+# The two-goal benchmark fixes this: with two competing absorbing goals
+# of *different* reward magnitudes (R_A < R_B), the optimal policy
+# depends on the magnitude difference, not just the goal locations. A
+# trivial reward "+10 at both goals" cannot reproduce pi* because it
+# can't tell A and B apart, so the agent picks whichever is closer.
+#
+# See `docs/c_itl_options.md` "Methodology gap discovered 2026-05-01"
+# for the full motivation and the falsifier this benchmark certifies.
+
+
+def make_two_goal_gridworld(
+    grid_size: int = 5,
+    gamma: float = 0.95,
+    slip_prob: float = 0.2,
+    R_A: float = 5.0,
+    R_B: float = 10.0,
+    step_cost: float = -0.1,
+    soft_wall_penalty: float = -5.0,
+    soft_walls: Optional[List[Tuple[int, int]]] = None,
+) -> TabularMDP:
+    """
+    Gridworld with two competing absorbing goals of different reward
+    magnitudes, separated by a soft-wall barrier. Designed to be NOT
+    goal-dominated, so that recovering the reward STRUCTURE (not just
+    the goal locations) is required to match pi*.
+
+    States: ``grid_size * grid_size`` cells, indexed ``row * grid_size + col``.
+    Actions: 0=Up, 1=Down, 2=Left, 3=Right (matches `make_gridworld`).
+    Goal A: top-right ``(0, grid_size - 1)``, absorbing, reward ``R_A``.
+    Goal B: bottom-left ``(grid_size - 1, 0)``, absorbing, reward ``R_B``.
+    Step cost on every non-terminal, non-barrier tile.
+    Soft-wall penalty on barrier tiles (the agent still transitions; the
+    penalty is the reward for *entering* the tile).
+    Slip mechanics identical to `make_gridworld`.
+
+    Args:
+        grid_size: side length of the square grid (default 5).
+        gamma: discount factor (default 0.95, paper Gridworld value).
+        slip_prob: probability of slipping to a neighbor of the intended
+            destination (default 0.2, paper value).
+        R_A: reward at the smaller goal A (default 5.0).
+        R_B: reward at the larger goal B (default 10.0); B is the policy-
+            relevant goal in expectation when the barrier doesn't make
+            it too expensive.
+        step_cost: per-step reward on non-terminal, non-barrier tiles.
+        soft_wall_penalty: per-step reward on barrier tiles.
+        soft_walls: optional list of (row, col) for the barrier. If
+            None, defaults to the main-diagonal cells excluding the
+            corners — `[(i, i) for i in range(1, grid_size - 1)]` —
+            which forces direct anti-diagonal trajectories between A
+            and B to either eat the penalty or detour around the
+            corners. The default is calibrated to make the env
+            non-goal-dominated for `R_A=5`, `R_B=10`, slip 0.2; if you
+            change those, re-verify with
+            `tests.test_smoke.test_two_goal_is_NOT_goal_dominated`.
+
+    Returns:
+        TabularMDP with shape (S=grid_size**2, A=4, S=grid_size**2).
+    """
+    n_states = grid_size * grid_size
+    n_actions = 4
+
+    def state_idx(r, c):
+        return r * grid_size + c
+
+    def state_rc(s):
+        return s // grid_size, s % grid_size
+
+    action_deltas = {
+        0: (-1, 0),  # Up
+        1: (1, 0),   # Down
+        2: (0, -1),  # Left
+        3: (0, 1),   # Right
+    }
+
+    goal_A = state_idx(0, grid_size - 1)            # top-right
+    goal_B = state_idx(grid_size - 1, 0)            # bottom-left
+
+    if soft_walls is None:
+        # Default: a "thick diagonal" barrier — main-diagonal cells plus the
+        # cells on either side of the centre cell — which blocks both the
+        # exact anti-diagonal and the immediately adjacent shortcuts. The
+        # thinner barrier (just the main diagonal minus corners) gives a
+        # mean truth-vs-trivial gap right at the 0.10 threshold and
+        # occasionally falls below it; this thicker layout pushes the gap
+        # consistently into the 0.15–0.20 range across seeds 0..4 with
+        # `R_A=5`, `R_B=10`, slip 0.2, step cost -0.1, penalty -5.
+        if grid_size == 5:
+            soft_walls = [
+                (1, 1), (2, 2), (3, 3),     # main diagonal (no corners)
+                (1, 2), (2, 1),              # cells flanking (2, 2) on the
+                (2, 3), (3, 2),              # near-anti-diagonal directions
+            ]
+        else:
+            # General-grid fallback: just the main-diagonal cells minus
+            # corners. Re-tune for a different grid size if needed.
+            soft_walls = [(i, i) for i in range(1, grid_size - 1)]
+    soft_wall_set = {state_idx(r, c) for (r, c) in soft_walls}
+
+    if goal_A in soft_wall_set or goal_B in soft_wall_set:
+        raise ValueError(
+            "soft_walls must not include either goal cell; got "
+            f"goal_A={goal_A}, goal_B={goal_B}, walls={sorted(soft_wall_set)}"
+        )
+
+    T = np.zeros((n_states, n_actions, n_states))
+    R = np.full((n_states, n_actions), step_cost)
+
+    R[goal_A, :] = R_A
+    R[goal_B, :] = R_B
+    for sw in soft_wall_set:
+        R[sw, :] = soft_wall_penalty
+
+    def clip(r, c):
+        if 0 <= r < grid_size and 0 <= c < grid_size:
+            return r, c
+        return None
+
+    for s in range(n_states):
+        r, c = state_rc(s)
+
+        if s == goal_A or s == goal_B:
+            T[s, :, s] = 1.0
+            continue
+
+        for a in range(n_actions):
+            dr, dc = action_deltas[a]
+            intended_rc = clip(r + dr, c + dc)
+            if intended_rc is None:
+                intended_next = s
+                ir, ic = r, c
+            else:
+                ir, ic = intended_rc
+                intended_next = state_idx(ir, ic)
+
+            T[s, a, intended_next] += (1 - slip_prob)
+
+            for (ddr, ddc) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                slip_rc = clip(ir + ddr, ic + ddc)
+                if slip_rc is None:
+                    slip_next = intended_next
+                else:
+                    slip_next = state_idx(*slip_rc)
+                T[s, a, slip_next] += slip_prob / 4.0
+
+    T /= T.sum(axis=2, keepdims=True)
+    return TabularMDP(n_states, n_actions, T, R, gamma)
+
+
+def two_goal_states(grid_size: int = 5) -> Tuple[int, int]:
+    """Return (goal_A_state, goal_B_state) for the two-goal env."""
+    goal_A = 0 * grid_size + (grid_size - 1)
+    goal_B = (grid_size - 1) * grid_size + 0
+    return goal_A, goal_B
+
+
+# =============================================================================
 # 3. RANDOMWORLD (paper spec)
 # =============================================================================
 
