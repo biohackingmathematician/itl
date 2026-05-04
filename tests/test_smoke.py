@@ -126,7 +126,9 @@ def test_mce_corridor_match_with_anchor():
     """MCE with anchor (2, 0, 10.0) must recover pi* on corridor.
 
     Pre-fix (naive gradient ascent): match=0.000.
-    Post-fix (L-BFGS-B + null-space anchor): match=1.000.
+    Post-fix v1 (L-BFGS-B R-step + null-space anchor): match=1.000.
+    Post-fix v2 (Herman et al. 2016 joint T-step): match=1.000 AND
+        T_MCE differs from T_MLE (no longer a degenerate baseline).
     """
     from src.mce_baseline import mce_solve
     mdp = make_corridor(gamma=0.9)
@@ -145,6 +147,13 @@ def test_mce_corridor_match_with_anchor():
     assert best_matching(pi_hat, pi_star) == 1.0
     # Anchor must be exact to floating-point precision.
     assert abs(w_hat[2] - 10.0) < 1e-6
+    # T_MCE must be DIFFERENT from T_MLE — the joint T-step has run.
+    # On this seed, ||T_MCE - T_MLE||_2 ≈ 0.26 (well above 0.01 floor).
+    t_diff = float(np.sqrt(((T_hat - T_mle) ** 2).sum()))
+    assert t_diff > 0.01, (
+        f"T_MCE is too close to T_MLE (||diff||_2={t_diff:.4f}, "
+        f"need > 0.01). Joint T-step regressed back to T_MLE."
+    )
 
 
 # ---------------------------------------------------------------------------

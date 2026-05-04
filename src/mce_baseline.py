@@ -41,6 +41,16 @@ the additive-constant ambiguity (Phi[s, a] @ w == value), implemented
 by null-space parameterization w = w_p + N_basis @ z so L-BFGS-B
 remains unconstrained and the constraint holds exactly.
 
+STATUS (2026-05-03): T-step upgraded from `T = T_MLE` to the joint
+likelihood T-step from Herman et al. 2016. With w (and R = Phi @ w)
+held fixed, find T to maximize
+    log P(D | T, R) = sum_{s,a,s'} N[s,a,s'] log T[s'|s,a]
+                    + lambda * sum_{s,a} N[s,a] log pi_softBellman(a|s; T, R)
+where T is parameterized by softmax(phi) per (s, a). Gradient is
+computed analytically via the same chain rule as `maxent_irl_step`,
+extended to T-space — see `mce_t_step_joint` docstring for the
+derivation.
+
 Soft-Bellman backup + soft-policy machinery is unchanged (still
 correct: with true w, it recovers pi* on the corridor). On the corridor
 with anchor=(2, 0, 10.0), `mce_solve` recovers pi* with
@@ -312,13 +322,199 @@ def _stationary_state_dist(
 
 
 # ---------------------------------------------------------------------------
-# T-step: simple Laplace-smoothed MLE (placeholder for full Herman et al.)
+# T-step: simple Laplace-smoothed MLE (kept for the initial T iterate of
+# `mce_solve` and for unit tests that just want the prior-mean T̂).
 # ---------------------------------------------------------------------------
 
 def mle_t_step(N: np.ndarray, delta: float = 0.001) -> np.ndarray:
     """T-step: posterior mean of Dir(N + delta). Same as paper Eq 5."""
     smoothed = N + delta
     return smoothed / smoothed.sum(axis=2, keepdims=True)
+
+
+# ---------------------------------------------------------------------------
+# T-step: joint likelihood (Herman et al. 2016)
+# ---------------------------------------------------------------------------
+
+def _softmax_T(phi: np.ndarray) -> np.ndarray:
+    """Numerically stable row-wise softmax over the last axis.
+
+    Input shape (S, A, S); output shape (S, A, S) with each row a simplex.
+    """
+    m = phi.max(axis=2, keepdims=True)
+    ex = np.exp(phi - m)
+    return ex / ex.sum(axis=2, keepdims=True)
+
+
+def mce_t_step_joint(
+    N: np.ndarray,
+    T_init: np.ndarray,
+    R: np.ndarray,
+    gamma: float,
+    lambda_balance: float = 1.0,
+    temperature: float = 1.0,
+    n_iter: int = 50,
+    tol: float = 1e-7,
+    verbose: bool = False,
+) -> Tuple[np.ndarray, dict]:
+    """
+    Joint-likelihood T-step from Herman et al. (2016). With reward
+    R = Phi @ w held fixed, solve
+
+        max_T  L1(T) + lambda * L2(T; R)
+
+    where
+        L1(T) = sum_{s,a,s'} N[s,a,s'] log T[s'|s,a]                   (data NLL)
+        L2(T) = sum_{s,a} N[s,a] log pi_softBellman(a|s; T, R)         (soft-MLE)
+
+    subject to T[s, a, :] in the simplex. We softmax-parameterize
+    T = softmax(phi) over the last axis (so simplex is automatic) and
+    minimize -L1 - lambda * L2 over phi via L-BFGS-B.
+
+    Analytical gradient (key derivations):
+
+      dL1/dphi[s,a,k] = N[s,a,k] - T[s,a,k] * N_sa[s,a]
+        (standard softmax-derivative of cross-entropy.)
+
+      dL2/dphi[s,a,k] requires the soft-Bellman chain rule. Using
+      log pi_soft(a*|s*) = Q_soft(s*,a*)/temp - V_soft(s*)/temp,
+      and noting V_soft = log-sum-exp_a Q_soft / temp,
+
+        dlog pi_soft(a*|s*)/dphi[s,a,k]
+          = (1/temp) * (dQ_soft(s*,a*)/dphi[s,a,k]
+                        - sum_b pi_soft(b|s*) dQ_soft(s*,b)/dphi[s,a,k])
+
+      The dependence of Q_soft on phi[s,a,k] has two parts:
+        (i)  direct: only when (s*, a*) == (s, a), through T[s,a,k]
+             changing the next-state distribution at (s, a).
+        (ii) indirect: V_soft(s') depends on phi[s,a,k] via the
+             soft-Bellman fixed point, which is policy evaluation under
+             pi_soft. Solving the resulting linear system yields the
+             "successor representation" M = (I - gamma P_pi)^{-1}.
+
+      Combining and summing over observed (s*, a*) collapses cleanly to
+
+        dL2/dphi[s,a,k] = f[s,a,k] * g[s,a]
+
+      with
+        f[s,a,k] = (1/temp) * T[s,a,k] * (V_soft[k] - E_T_sa[V_soft])
+        g[s,a]   = gamma * N_sa[s,a]
+                 + gamma * pi(a|s) * (gamma * (visit_T @ M)[s] - (N_s @ M)[s])
+
+      where:
+        visit_T[s'] = sum_{s_p, a_p} N_sa[s_p, a_p] * T[s_p, a_p, s']
+        N_s[s']     = sum_{a*} N_sa[s', a*]
+        P_pi[s,s']  = sum_a pi_soft(a|s) * T[s, a, s']
+        M           = (I - gamma * P_pi)^{-1}
+
+      The gradient ends up being O(S^2 + S^3) per call (the S^3 is the
+      one matrix inverse for M); cheap for S=25 (gridworld) and S=15
+      (randomworld).
+
+    Args:
+        N: (S, A, S) transition counts (nonnegative, integers ok).
+        T_init: (S, A, S) starting T (e.g. the previous outer iterate's
+            T, or T_MLE on the very first call).
+        R: (S, A) reward currently held fixed.
+        gamma: discount factor.
+        lambda_balance: weight on the soft-Bellman action likelihood
+            term. 1.0 matches the published form; 0.0 reduces to the
+            data-NLL T-step (whose maximum is just the empirical
+            transition frequencies).
+        temperature: soft-Bellman temperature.
+        n_iter: max L-BFGS-B iterations (paper-style cap of 50).
+        tol: L-BFGS-B gradient tolerance.
+        verbose: print convergence summary.
+
+    Returns:
+        (T_hat, info) with T_hat the simplex-projected softmax(phi*) and
+        info a dict with convergence diagnostics.
+    """
+    n_states, n_actions, _ = N.shape
+    N_sa = N.sum(axis=2)                              # (S, A)
+    N_s = N_sa.sum(axis=1)                            # (S,)
+    eps = 1e-12
+
+    # phi0 = log(T_init) - shift for numerical stability. Softmax is
+    # invariant under per-row constant shift; the shift here is purely
+    # cosmetic / numerical. We clip floor to avoid -inf at zero entries.
+    T0 = np.maximum(T_init, eps)
+    phi0 = np.log(T0)
+    phi0 -= phi0.max(axis=2, keepdims=True)
+
+    def objective_and_grad(phi_flat: np.ndarray) -> Tuple[float, np.ndarray]:
+        phi = phi_flat.reshape(n_states, n_actions, n_states)
+        T = _softmax_T(phi)
+
+        # ----- L1: data NLL -----
+        log_T = np.log(np.maximum(T, eps))
+        L1 = float(np.sum(N * log_T))
+
+        # ----- Soft-Bellman backup at current (T, R) -----
+        Q = soft_bellman_q(T, R, gamma, temperature=temperature)
+        Q_t = Q / temperature
+        mx = Q_t.max(axis=1, keepdims=True)
+        log_Z = mx.squeeze(axis=1) + np.log(np.exp(Q_t - mx).sum(axis=1))
+        log_pi = Q_t - log_Z[:, None]
+        pi = np.exp(log_pi)                           # (S, A)
+        V = log_Z * temperature                       # V_soft (S,)
+
+        # ----- L2: soft-MLE term -----
+        L2 = float(np.sum(N_sa * log_pi))
+
+        loss = -(L1 + lambda_balance * L2)            # we minimize
+
+        # ----- Gradient of L1 -----
+        # dL1/dphi[s,a,k] = N[s,a,k] - T[s,a,k] * N_sa[s,a]
+        grad_L1 = N - T * N_sa[:, :, None]            # (S, A, S)
+
+        # ----- Gradient of L2 -----
+        # f[s,a,k] = (1/temp) * T[s,a,k] * (V[k] - E_T_sa[V])
+        E_T_V = np.einsum("sak,k->sa", T, V)          # (S, A)
+        f = (T * (V[None, None, :] - E_T_V[:, :, None])) / temperature
+
+        # M = (I - gamma * P_pi)^{-1}, with P_pi[s, s'] = sum_a pi(a|s) T[s,a,s']
+        P_pi = np.einsum("sa,sak->sk", pi, T)         # (S, S')
+        I = np.eye(n_states)
+        M = np.linalg.solve(I - gamma * P_pi, I)      # (S, S)
+
+        # visit_T[s'] = sum_{s_p, a_p} N_sa[s_p, a_p] * T[s_p, a_p, s']
+        visit_T = np.einsum("sa,sak->k", N_sa, T)     # (S,)
+        X = visit_T @ M                               # (S,)
+        Y = N_s @ M                                   # (S,)
+
+        # g[s, a] = gamma * N_sa[s, a]
+        #        + gamma * pi(a|s) * (gamma * X[s] - Y[s])
+        g = gamma * N_sa + gamma * pi * (gamma * X[:, None] - Y[:, None])
+
+        grad_L2 = f * g[:, :, None]                   # (S, A, S)
+
+        grad = -(grad_L1 + lambda_balance * grad_L2)
+        return loss, grad.flatten()
+
+    res = minimize(
+        objective_and_grad, phi0.flatten(),
+        method="L-BFGS-B", jac=True,
+        options={"maxiter": int(n_iter), "gtol": float(tol), "disp": False},
+    )
+
+    phi_hat = res.x.reshape(n_states, n_actions, n_states)
+    T_hat = _softmax_T(phi_hat)
+
+    info = {
+        "converged": bool(res.success),
+        "n_iter": int(res.nit),
+        "fun": float(res.fun),
+        "grad_norm_inf": float(np.max(np.abs(res.jac)))
+            if res.jac is not None else 0.0,
+        "message": str(res.message),
+    }
+    if verbose:
+        print(f"    [mce_t_step_joint] L-BFGS-B: converged={info['converged']} "
+              f"nit={info['n_iter']} loss={info['fun']:.6f} "
+              f"|grad|_inf={info['grad_norm_inf']:.2e}")
+
+    return T_hat, info
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +528,9 @@ def mce_solve(
     max_outer: int = 5,
     irl_iter: int = 200,
     irl_tol: float = 1e-7,
+    t_iter: int = 50,
+    t_tol: float = 1e-7,
+    lambda_balance: float = 1.0,
     anchor: Optional[Tuple[int, int, float]] = None,
     w_init: Optional[np.ndarray] = None,
     verbose: bool = False,
@@ -339,21 +538,31 @@ def mce_solve(
     irl_lr: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
-    MCE alternating solver. Returns (T_hat, w_hat, info).
+    Herman et al. 2016 alternating solver. Returns (T_hat, w_hat, info).
 
-    Iteration:
-      T  <- mle_t_step(N) (in this simple form, T is fixed at T_MLE)
-      w  <- maxent_irl_step(N, T, Phi, ..., anchor=anchor)
-      Repeat. With the simple non-adaptive T-step a single outer iteration
-      typically suffices; we keep the loop for forward-compat with a richer
-      T-step.
+    Outer loop:
+      iter 0:  T <- mle_t_step(N)   (Laplace-smoothed empirical T)
+      repeat:
+          w  <- maxent_irl_step(N, T, Phi, gamma, ..., anchor=anchor)
+          T  <- mce_t_step_joint(N, T, Phi @ w, gamma, ...)
+          stop when |dw|_inf < tol AND |dT|_inf < tol  or after max_outer.
+
+    The first iterate uses the previous T as the starting `T_init` for
+    `mce_t_step_joint`; this is a warm-started alternation, not a
+    cold-restart.
 
     Args:
         N, Phi, gamma, delta, temperature: as in `maxent_irl_step`.
-        max_outer: number of T/R alternations.
+        max_outer: number of (T, w) alternations.
         irl_iter, irl_tol: forwarded to L-BFGS-B inside the R-step.
-        anchor: optional (s, a, value) breaking additive-constant ambiguity.
-        w_init: optional starting w (default: zeros, or the anchor's
+        t_iter, t_tol: forwarded to L-BFGS-B inside the T-step
+            (default 50 iterations per inner, matching the paper-style
+            cap of 50).
+        lambda_balance: forwarded to `mce_t_step_joint` (weight on the
+            soft-Bellman action-likelihood term).
+        anchor: optional (s, a, value) breaking additive-constant
+            ambiguity in w.
+        w_init: optional starting w (default zeros, or the anchor's
             particular solution if `anchor` is set).
     """
     del irl_lr  # legacy, unused
@@ -366,6 +575,7 @@ def mce_solve(
         w_hat = w_init.astype(float).copy()
 
     for it in range(max_outer):
+        # ----- R-step: MaxEnt-IRL on current T -----
         w_new, ri = maxent_irl_step(
             N, T_hat, Phi, gamma,
             w_init=w_hat,
@@ -374,31 +584,42 @@ def mce_solve(
             n_iter=irl_iter, tol=irl_tol,
             verbose=verbose,
         )
-        change = float(np.max(np.abs(w_new - w_hat)))
+        w_change = float(np.max(np.abs(w_new - w_hat)))
+
+        # ----- T-step: joint likelihood on current R = Phi @ w_new -----
+        R_new = Phi @ w_new
+        T_new, ti = mce_t_step_joint(
+            N, T_hat, R_new, gamma,
+            lambda_balance=lambda_balance,
+            temperature=temperature,
+            n_iter=t_iter, tol=t_tol,
+            verbose=verbose,
+        )
+        T_change = float(np.max(np.abs(T_new - T_hat)))
+
         info["outer_iters"].append({
-            "it": it, "w_change": change,
+            "it": it,
+            "w_change": w_change, "T_change": T_change,
             "irl_converged": ri.get("converged", False),
             "irl_nit": ri.get("n_iter", 0),
+            "irl_grad_inf": ri.get("grad_norm_inf", 0.0),
             "anchor_residual": ri.get("anchor_residual", 0.0),
+            "t_converged": ti.get("converged", False),
+            "t_nit": ti.get("n_iter", 0),
+            "t_grad_inf": ti.get("grad_norm_inf", 0.0),
         })
         if verbose:
-            print(f"  outer {it}: |dw|={change:.6f} "
+            print(f"  outer {it}: |dw|={w_change:.6f} |dT|={T_change:.6f} "
                   f"irl_nit={ri.get('n_iter', 0)} "
-                  f"irl_converged={ri.get('converged', False)}")
+                  f"t_nit={ti.get('n_iter', 0)}")
+
         w_hat = w_new
-        if change < 1e-6:
+        T_hat = T_new
+        if w_change < 1e-6 and T_change < 1e-6:
             info["termination"] = "fixed_point"
             break
     else:
         info["termination"] = "max_outer"
-
-    # NOTE: The published Herman et al. 2016 method has a more elaborate
-    # T-step that constrains T using the inferred reward (the dynamics must
-    # be consistent with the soft-Bellman policy that explains the demos).
-    # Implementing that requires a non-convex projection step; we leave it
-    # as TODO. For most downstream metrics (best matching, eps-matching,
-    # CVaR), the simpler form here is a reasonable lower bound on what
-    # the full Herman et al. method would deliver.
 
     return T_hat, w_hat, info
 
