@@ -26,11 +26,123 @@
 
 
 Run date: 2026-04-13 (initial), updated 2026-04-28, 2026-05-01 (full
-50-seed Gridworld 40% sweep), **2026-05-02 (complete synthetic
-reproduction across 40%/20%/0% stochastic ablations — see next section)**
+50-seed Gridworld 40% sweep), 2026-05-02 (complete synthetic
+reproduction across 40%/20%/0% stochastic ablations), **2026-05-03
+(two-goal non-goal-dominated benchmark for ITL+IRL — see next section)**.
 Scope: paper Tables 4, 5, 6 standard + transfer, both environments
 (Gridworld + RandomWorld), all five methods (MLE, ITL, BITL, MCE, PS),
-at full paper-grade seed counts.
+at full paper-grade seed counts; plus a custom two-goal gridworld
+sub-benchmark for the C-ITL (Combined ITL+IRL) thesis direction.
+
+## 2026-05-03: Two-goal benchmark — ITL+IRL acceptance test partially fails
+
+This section documents the two-goal-gridworld benchmark added in
+`src/environments.py::make_two_goal_gridworld` and the stress test in
+`experiments/run_itl_irl_two_goal.py`. The goal was to certify that
+the combined ITL+IRL prototype recovers *useful reward signal* —
+not just locates the goal — by comparing it against the trivial
+"+10 at both goals" baseline on a non-goal-dominated env.
+
+**Pre-acceptance: env IS non-goal-dominated under MLE-T.** With the
+`make_two_goal_gridworld` defaults (R_A=5, R_B=10, slip=0.2,
+soft-wall penalty=−5, thick-diagonal barrier of 7 cells), the unit
+test `test_two_goal_is_NOT_goal_dominated` passes: at seed 0,
+`pi*(T_MLE, R_TRUE)` matches pi* at 0.680 vs `pi*(T_MLE, R_trivial)`
+at 0.520 — a +0.16 gap, comfortably above the 0.10 threshold.
+
+**Acceptance test result on ITL+IRL (20 seeds, coverage = 1.0):**
+
+| method | best_matching mean ± std |
+|--------|---|
+| MLE-T + R_TRUE | 0.598 ± 0.051 |
+| MLE-T + R_trivial | 0.440 ± 0.054 |
+| ITL-T + R_TRUE | 0.848 ± 0.056 |
+| ITL-T + R_trivial | 0.816 ± 0.054 |
+| ITL+IRL (joint) | 0.810 ± 0.058 |
+
+| acceptance | gap | criterion | result |
+|-|-|-|-|
+| ITL+IRL − MLE-T+R_trivial | +0.370 | ≥ 0.05 | ✓ PASS |
+| ITL+IRL − ITL-T+R_trivial | −0.006 | ≥ 0.05 | ✗ FAIL |
+
+Only the *easier* gap passes. The unit test
+`test_itl_irl_recovers_R_on_two_goal` checks just the MLE comparison
+and passes; the stronger ITL comparison from the experiment script
+fails by ≈ 0.06.
+
+**Diagnostic — why ITL+IRL ties (does not beat) ITL-T + R_trivial.**
+The methodology gap is real but partly an artifact of the (env,
+feature, prior) combination:
+
+1. ITL's eps-ball constraints are derived from observed expert
+   actions (per paper Definition 1). Whatever R you pass in, the
+   ITL T-step fits T so that the *observed* expert actions are
+   eps-optimal under the chosen R and the chosen T. This means the
+   expert's preference (which encodes pi*) gets baked into T at
+   visited (s, a) pairs *regardless* of which R is on the input.
+   So `pi*(T_ITL_TRIV, R_trivial)` ≈ pi_expert ≈ pi* on visited
+   states. The 0.16 gap that exists under MLE-T collapses to ~0
+   under ITL-T.
+2. With one-hot (s, a) features and an L1 prior on w, ITL+IRL
+   recovers a *very* sparse R̂: in seed 0 only the anchor weight
+   `w[goal_B, action 0] = 10` is nonzero; the rest are zero. This
+   is *less* informative than R_trivial (which at least puts +10
+   at *both* goals). So ITL+IRL has no way to recover the soft-wall
+   penalties or the R_A=5 component — those features have no
+   constraint at unvisited (s, a) and the L1 pushes them to 0.
+3. At unvisited (s, a) pairs, T̂ defaults to T_MLE (the L2 fit) for
+   all three methods (ITL-T+R_TRUE, ITL-T+R_trivial, ITL+IRL).
+   Since R_HAT only carries the goal anchor and the soft-walls /
+   step costs are missing, `pi*(T̂, R̂)` at unvisited states cannot
+   recover the wall avoidance that pi* exhibits. The same is true
+   for `pi*(T_ITL_TRIV, R_trivial)`. Result: the two policies make
+   essentially the same mistakes at unvisited (s, a).
+4. Per-seed gaps `itl_irl − itl_triv` are clustered at ±0.04, with
+   one outlier at +0.08 (seed 14). The mean −0.006 is essentially
+   zero. About half the per-seed −0.04 gaps come from argmax
+   tie-breaking at the absorbing goal cells (`pi_star[goal_A] =
+   any action` is tie-broken to action 0; ITL+IRL's slight T̂
+   asymmetry at goal_A breaks the tie to action 1, costing one
+   matched cell out of 25 = 0.04).
+
+**What this tells the thesis.** The Combined ITL+IRL prototype, with
+one-hot (s, a) features and an L1 sparsity prior, is **not** strong
+enough to beat the trivial-reward + ITL-T baseline by a margin on
+this benchmark. Two implications:
+
+- The *acceptance criterion as specified* (gap ≥ 0.05 vs ITL-T +
+  R_trivial) is currently the right falsifier of the prototype: it
+  fails. The IRL step, in this configuration, isn't doing useful
+  work *that ITL alone can't do via its eps-ball constraints alone*.
+- The most likely fixes are *outside the scope of the unit test*
+  and require methodology changes:
+  - **Richer features**: feature-engineered Phi(s, a) encoding
+    "is this a soft-wall cell", "distance to goal A vs B", etc.,
+    so R has a chance to recover the wall penalty without needing
+    a constraint at every wall cell.
+  - **Different prior on w**: replace L1 sparsity with a small L2
+    penalty + a separate hard constraint that ranks the two anchored
+    rewards (R(goal_A) < R(goal_B)).
+  - **Different metric**: best_matching at the absorbing goal cells
+    is degenerate (all actions optimal, only argmax tie-breaking
+    decides). Switching to normalized value (which integrates over
+    policy quality) would reduce the artifact.
+
+**Action: STOPPING for user input before committing Task 1.** Per the
+working rules ("if it doesn't, ... we need to dig in" and "Stop and
+ask if anything looks wrong"), the −0.006 gap against the
+ITL-T+R_trivial baseline is the kind of result the user explicitly
+flagged as "needs to dig in". I have dug in (this section); the
+question is whether to (a) accept the partial pass and commit, (b)
+relax the spec to "ITL+IRL beats MLE-T+R_trivial only" and document
+the ITL-T limitation, or (c) iterate on features / prior / metric
+before committing. Option (a) leaves a known-failing acceptance
+criterion in `experiments/run_itl_irl_two_goal.py`; option (b)
+matches what the unit test currently asserts; option (c) is an
+open-ended methodology refactor.
+
+Output table: `results/tables/two_goal_itl_irl_sf040.json`
+(per-seed values + summary).
 
 ## 2026-05-02: complete synthetic reproduction across 40%/20%/0% stochastic ablations
 
@@ -852,7 +964,7 @@ Both `run_gridworld.py` and `run_randomworld.py` now read
 namespaced (e.g. `gridworld_coverage_sweep_sf040.json`,
 `gridworld_coverage_sweep_sf020.json`,
 `gridworld_coverage_sweep_sf000.json`). Legacy 40% checkpoint is migrated
-on first 40% run. Overnight runbook in `CLAUDE.md`.
+on first 40% run. Overnight runbook in `PROJECT.md`.
 
 ## Setup
 

@@ -20,7 +20,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.environments import make_corridor, make_gridworld, gridworld_start_state
+from src.environments import (
+    make_corridor,
+    make_gridworld,
+    gridworld_start_state,
+    make_two_goal_gridworld,
+    two_goal_states,
+)
 from src.expert import (
     generate_batch_data,
     make_epsilon_optimal_expert,
@@ -244,4 +250,132 @@ def test_gridworld_is_goal_dominated():
         f"trivial-R match {match_triv}. Either the MDP changed or the "
         "policy under T_MLE became more reward-discriminating, which is "
         "good news for the ITL+IRL benchmark — update this test."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Two-goal gridworld: NOT goal-dominated. The complement of the test above.
+# Documents the methodology gap fix from `docs/c_itl_options.md`.
+# ---------------------------------------------------------------------------
+
+def test_two_goal_is_NOT_goal_dominated():
+    """Two-goal gridworld must NOT be goal-dominated.
+
+    On this benchmark, a trivial reward `R_trivial = 10 * 1[s in {A, B}]`
+    paired with `T_MLE` should produce a policy that's at least 10%
+    *worse* (in best-matching to pi*) than the true reward paired with
+    the same `T_MLE`. If this fails, the env collapses to "find any
+    goal" and the ITL+IRL acceptance test on it would not certify
+    that the IRL step is doing useful work — it would just be testing
+    goal-localization.
+
+    See `docs/c_itl_options.md` "Methodology gap discovered 2026-05-01".
+    """
+    mdp = make_two_goal_gridworld(grid_size=5, gamma=0.95, slip_prob=0.2)
+    goal_A, goal_B = two_goal_states(grid_size=5)
+    _, _, pi_star = mdp.compute_optimal_policy()
+
+    pi_expert = make_epsilon_optimal_expert(
+        mdp, epsilon=5.0, target_stochastic_fraction=0.4,
+    )
+    N, T_mle, _ = generate_batch_dataset(
+        mdp, pi_expert, coverage=1.0, K=10, delta=0.001, seed=0,
+    )
+
+    # pi*(T_MLE, R_TRUE)
+    mdp_truth = TabularMDP(mdp.n_states, mdp.n_actions, T_mle, mdp.R, mdp.gamma)
+    _, _, pi_truth = mdp_truth.compute_optimal_policy()
+
+    # pi*(T_MLE, R_trivial) — equal +10 at both goals, 0 everywhere else.
+    R_trivial = np.zeros((mdp.n_states, mdp.n_actions))
+    R_trivial[goal_A, :] = 10.0
+    R_trivial[goal_B, :] = 10.0
+    mdp_triv = TabularMDP(mdp.n_states, mdp.n_actions, T_mle, R_trivial, mdp.gamma)
+    _, _, pi_triv = mdp_triv.compute_optimal_policy()
+
+    match_truth = best_matching(pi_truth, pi_star)
+    match_triv = best_matching(pi_triv, pi_star)
+    gap = match_truth - match_triv
+
+    assert gap > 0.10, (
+        f"Two-goal gridworld is still goal-dominated: truth-R match "
+        f"{match_truth:.3f} vs trivial-R match {match_triv:.3f} "
+        f"(gap {gap:+.3f}, need > 0.10). Either widen the reward gap "
+        f"(R_B - R_A) or strengthen the soft-wall barrier."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Two-goal ITL+IRL acceptance: must beat MLE-T + R_trivial by >= 0.05.
+# (Full 20-seed acceptance against ITL-T + R_trivial is in
+#  experiments/run_itl_irl_two_goal.py; see MVR_findings.md for the
+#  partial-failure writeup of the ITL-T comparison.)
+# ---------------------------------------------------------------------------
+
+def test_itl_irl_recovers_R_on_two_goal():
+    """ITL+IRL must recover at least *some* reward signal beyond the
+    naive MLE-T + R_trivial baseline.
+
+    Single-seed regression test: on the two-goal env (seed=0),
+    `pi*(T_HAT, R_HAT)` from joint inference must beat
+    `pi*(T_MLE, R_trivial)` by at least 0.05 in best_matching against
+    pi*. Empirically the gap is ≈ 0.36 (20-seed mean +0.37), so this
+    has wide headroom.
+
+    Note: the *stronger* test "ITL+IRL beats ITL-T + R_trivial by 0.05"
+    is intentionally NOT enforced here. That comparison fails on this
+    benchmark by ≈ 0.01 because ITL's eps-ball constraints absorb the
+    expert's preferences into T regardless of the input R, leaving
+    ITL+IRL with little headroom against ITL-T + any reasonable R.
+    See `results/MVR_findings.md` for the full diagnostic.
+    """
+    from src.itl_irl_solver import solve_itl_irl
+
+    mdp = make_two_goal_gridworld(grid_size=5, gamma=0.95, slip_prob=0.2)
+    goal_A, goal_B = two_goal_states(grid_size=5)
+    _, _, pi_star = mdp.compute_optimal_policy()
+
+    pi_expert = make_epsilon_optimal_expert(
+        mdp, epsilon=5.0, target_stochastic_fraction=0.4,
+    )
+    N, T_mle, _ = generate_batch_dataset(
+        mdp, pi_expert, coverage=1.0, K=10, delta=0.001, seed=0,
+    )
+
+    # Baseline: pi*(T_MLE, R_trivial)
+    R_trivial = np.zeros((mdp.n_states, mdp.n_actions))
+    R_trivial[goal_A, :] = 10.0
+    R_trivial[goal_B, :] = 10.0
+    mdp_triv = TabularMDP(
+        mdp.n_states, mdp.n_actions, T_mle, R_trivial, mdp.gamma
+    )
+    _, _, pi_triv = mdp_triv.compute_optimal_policy()
+    bm_triv = best_matching(pi_triv, pi_star)
+
+    # ITL+IRL with one-hot (s, a) features and anchor at goal B = 10.0.
+    # lambda_l1 = 0.1 reaches the same fixed point as 0.01 in 2 outer
+    # iterations, so the test runs in ~20s.
+    d = mdp.n_states * mdp.n_actions
+    Phi = np.zeros((mdp.n_states, mdp.n_actions, d))
+    for s in range(mdp.n_states):
+        for a in range(mdp.n_actions):
+            Phi[s, a, s * mdp.n_actions + a] = 1.0
+
+    T_hat, w_hat, _ = solve_itl_irl(
+        N, T_mle, Phi, mdp.gamma, epsilon=5.0,
+        anchor=(goal_B, 0, 10.0), lambda_l1=0.1,
+        max_iter=3, tol=1e-6, verbose=False,
+    )
+    R_hat = Phi @ w_hat
+    mdp_hat = TabularMDP(
+        mdp.n_states, mdp.n_actions, T_hat, R_hat, mdp.gamma
+    )
+    _, _, pi_hat = mdp_hat.compute_optimal_policy()
+    bm_irl = best_matching(pi_hat, pi_star)
+
+    gap = bm_irl - bm_triv
+    assert gap >= 0.05, (
+        f"ITL+IRL did not beat MLE-T + R_trivial by >= 0.05: "
+        f"ITL+IRL={bm_irl:.3f}, MLE-T+R_trivial={bm_triv:.3f}, "
+        f"gap={gap:+.3f}. Joint inference is broken or env regressed."
     )
