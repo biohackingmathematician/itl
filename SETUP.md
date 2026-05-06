@@ -1,4 +1,4 @@
-# Setup Guide: GitHub + Cursor
+# Setup Guide
 
 ## Step 1: Install Git (if not already installed)
 
@@ -46,46 +46,37 @@ GitHub will ask you to authenticate. Use either:
 - A Personal Access Token (Settings > Developer settings > Personal access tokens > Tokens (classic) > Generate new token, check "repo" scope)
 - Or set up SSH keys: https://docs.github.com/en/authentication/connecting-to-github-with-ssh
 
-## Step 5: Install Cursor
+## Step 5: Open the Project in Your Editor
 
-1. Go to https://cursor.com
-2. Download for macOS
-3. Install (drag to Applications)
-4. Open Cursor
-5. Sign in (free tier is fine to start)
+Open the repo folder in whichever editor you prefer (VS Code, Sublime,
+neovim, PyCharm, etc.):
+```bash
+cd ~/Documents/Columbia/Demitrascu\ research/Demitrascu\ Research/itl-reproduction
+```
 
-## Step 6: Open the Project in Cursor
+## Step 6: Install Python Dependencies
 
-1. In Cursor: File > Open Folder
-2. Navigate to: `~/Documents/Columbia/Demitrascu research/Demitrascu Research/itl-reproduction`
-3. Open it
-
-Cursor has built-in AI assistance. You can:
-- Press Cmd+K to ask it to edit code
-- Press Cmd+L to chat about the codebase
-- It has full context of your project files
-
-## Step 7: Install Python Dependencies
-
-In Cursor's terminal (Ctrl+`):
 ```bash
 pip install -r requirements.txt
 ```
 
-## Step 8: Verify Everything Works
+## Step 7: Verify Everything Works
 
 ```bash
-# This should match your hand calculations
-python experiments/run_corridor.py
+# Should match the hand calculations in the corridor verification
+python -m experiments.run_corridor
 
-# This is the main benchmark
-python experiments/run_gridworld.py
+# Main synthetic benchmark
+python -m experiments.run_gridworld
+
+# Run the test suite (under 30 s)
+python -m pytest tests/
 ```
 
 ## Workflow Going Forward
 
-1. Make changes in Cursor
-2. Test locally: `python experiments/run_*.py`
+1. Make changes locally
+2. Test: `python -m experiments.run_*` and `python -m pytest tests/`
 3. Commit: `git add . && git commit -m "description of changes"`
 4. Push: `git push`
-5. Show Bianca the GitHub repo and results
+5. Discuss the GitHub repo and results in lab meetings

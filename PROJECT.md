@@ -1,20 +1,20 @@
-# Project context for Claude
+# Project notes — ITL reproduction
 
-This file is loaded into context on every Claude conversation in this repo.
-Last updated 2026-04-28 by Agna + a Cowork session.
+Working notes on the state of the codebase. Useful when picking the
+project back up after a break.
 
 ## What this project is
 
 Reproduction of Benac et al. (2024), *Inverse Transition Learning: Learning
 Dynamics from Demonstrations* (AAAI 2025), as the foundation for Agna Chan's
-master's thesis. The thesis extension ("C-ITL") will pick one of the
+master's thesis. The thesis extension ("C-ITL") follows one of the
 paper's three named future-work directions — see "Thesis novelty" below.
 
-**Thesis deadline: end of May 2026** (~5 weeks out from the date above).
+**Deliverable plan:** white paper by 15 May 2026; thesis writing extends
+past the semester.
 
-The paper PDF is at `~/Library/Mobile Documents/.../290483d5-*.pdf` (Cowork
-project files). If that path isn't accessible from Claude Code, ask Agna
-for the PDF and we'll re-extract Future Work / Table 4.
+The paper PDF lives in the project files folder. If you don't have it
+locally, fetch it again before reading "Future Work" or Table 4 carefully.
 
 ## Repo state at a glance
 
@@ -134,8 +134,8 @@ python -m pytest tests/                     # 8 smoke tests, ~5 s
 
 These commands all checkpoint per-seed/per-world to
 `results/checkpoints/*.json` and skip completed work on resume. Run from
-the repo root in a regular Mac Terminal (NOT Cowork — the 45-second bash
-ceiling makes long runs impractical there). Each command produces a
+the repo root in a regular Mac Terminal — long-running compute jobs
+need a normal shell with no per-call timeout. Each command produces a
 namespaced output table that doesn't clobber the others.
 
 **Method columns:** by default each script computes only MLE and ITL
